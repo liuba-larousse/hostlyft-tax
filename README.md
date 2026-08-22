@@ -89,6 +89,8 @@ python -m pytest
 | `taxlib/db.py` | The database: its layout, and every read and write. |
 | `scripts/init_db.py` | Creates the database, or reports what's in it. |
 | `scripts/check_secrets.py` | Checks `tax/.env` is safe and correctly filled in. |
+| `scripts/pull_stripe.py` | Imports Stripe income, fees and payouts. |
+| `taxlib/stripe_import.py` | The rules deciding what counts as income. |
 | `scripts/` | The things you actually run — pulling from Stripe, calculating tax, sending reminders. |
 | `tests/` | The automatic checks. |
 | `tax/` | **Your private data.** Secrets and database. Never uploaded. |
@@ -201,6 +203,74 @@ than passing off a partial total as a complete one.
 
 ---
 
+## Importing from Stripe
+
+```
+python scripts/pull_stripe.py --dry-run   # show everything, write nothing
+python scripts/pull_stripe.py             # import for real
+python scripts/pull_stripe.py --year 2025
+```
+
+Safe to run any time. Every row is matched on its Stripe ID, so re-running
+updates what's there rather than adding it again.
+
+### Income is gross; unpaid invoices are not income
+
+A $225 invoice where Stripe keeps $10.20 is income of **$225** plus an expense
+of **$10.20**. Never income of $214.80.
+
+Only **paid** invoices count. Money owed to you isn't money received — open and
+draft invoices are listed separately so you can see what's outstanding, but they
+stay out of the totals.
+
+### The trap this importer is built around
+
+In this account, **every payment is also an invoice**. Import both and every
+payment is counted twice.
+
+That's easy to get wrong, because Stripe's current API deliberately leaves
+`charge.invoice` **empty** — so a payment *looks* standalone when it isn't. The
+real link runs the other way:
+
+```
+invoice  →  payments  →  payment_intent  →  charge
+```
+
+The importer builds the set of payment intents belonging to invoices and only
+treats a payment as separate income if it genuinely isn't in that set. Anything
+it does treat as separate is **flagged for review**, never quietly added — that
+flag is where a future double-count would show up first.
+
+### Three kinds of Stripe fee, not one
+
+All three are deductible, and each one missed is a lost deduction:
+
+| Fee | How it arrives |
+|---|---|
+| Processing fee | taken out of each payment |
+| Invoicing fee | a separate ledger entry, no payment attached |
+| Multicurrency settlement fee | a separate ledger entry, no payment attached |
+
+The last two are invisible to anything that only looks at payments. Each can
+also carry tax on top — a $0.90 invoicing fee with $0.07 tax is recorded as
+**$0.97**, because that's what it actually cost.
+
+Checked against the real account, for all three currencies:
+
+```
+payout = payment − processing fee − invoicing fee − settlement fee
+```
+
+to the cent.
+
+### Nothing is silently dropped
+
+If Stripe ever introduces a kind of ledger entry this importer doesn't
+recognise, it says so and tells you to mention it, rather than staying quiet and
+leaving money out of the totals.
+
+---
+
 ## Build progress
 
 | Stage | What it adds | Status |
@@ -208,7 +278,7 @@ than passing off a partial total as a complete one.
 | 1 | Skeleton — setup script, settings, secrets template | ✅ done |
 | 2 | Database — income, expenses, payouts, FX cache, alerts | ✅ done |
 | 3 | Secrets walkthrough | ✅ done |
-| 4 | Stripe income (gross, with fees as expenses) | not started |
+| 4 | Stripe income (gross, with fees as expenses) | ✅ done |
 | 5 | Currency conversion to USD | not started |
 | 6 | Wise + double-count prevention | not started |
 | 7 | Capital One one-time CSV import | not started |
