@@ -1,0 +1,45 @@
+# Python libraries this project needs.
+#
+# A "library" is code someone else wrote that we borrow instead of writing it
+# ourselves. This file is the shopping list; setup_mac.command does the shopping.
+#
+# Each line is: package-name, then the range of versions we accept.
+# The ranges are deliberately narrow. Pinning versions means the project keeps
+# working next year even if these libraries change how they behave.
+
+# --- Stage 4: Stripe income ---
+# Stripe's official library. Talks to your Stripe account and lists invoices,
+# fees and payouts, so we don't have to hand-write web requests.
+stripe>=11.0,<14.0
+
+# --- Stage 5 (currency) and Stage 6 (Wise) ---
+# Fetches data from the internet. Used for the European Central Bank exchange
+# rates and for the Wise account API.
+requests>=2.31,<3.0
+
+# The plumbing "requests" uses underneath to make secure connections.
+#
+# Why it is pinned below version 2: the Python that ships with macOS is built
+# against an older encryption library (LibreSSL). urllib3 version 2 dropped
+# support for it and prints a warning on every single run. Version 1.26 fully
+# supports it and stays quiet. Connections work either way - this is about not
+# burying real errors under a warning you're meant to ignore.
+#
+# If you ever install a newer Python from python.org, this pin can be removed.
+urllib3>=1.26.18,<2
+
+# --- Stage 6: Wise ---
+# Cryptography toolkit. Wise refuses to hand over statements unless we prove
+# who we are by signing a one-time code with a private key. This creates that
+# key and does the signing. (See PLAN.md, finding 1.)
+cryptography>=42.0,<46.0
+
+# --- Testing (every stage) ---
+# Runs the automatic checks that prove the numbers are right, e.g. that a
+# $2,000 invoice is counted once and not twice.
+pytest>=8.0,<9.0
+
+# Deliberately NOT here:
+#   python-dotenv  - reading the secrets file is ~20 lines, taxlib/config.py
+#                    does it with Python's built-in tools. One less thing to
+#                    install, one less thing to break.

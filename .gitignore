@@ -27,3 +27,8 @@ venv/
 
 # macOS
 .DS_Store
+
+# The private data folder: secrets, the database, and bank exports.
+# The rules above already cover these, but this blocks the whole folder as a
+# second line of defence.
+tax/
