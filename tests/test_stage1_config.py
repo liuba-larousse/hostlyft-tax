@@ -159,7 +159,15 @@ def test_all_four_contractors_are_watched():
 
 @pytest.mark.parametrize(
     "path",
-    ["tax/.env", "tax/hostlyft_tax.db", "tax/wise_private_key.pem", ".venv/x"],
+    [
+        "tax/.env",
+        "tax/hostlyft_tax.db",
+        "tax/hostlyft_tax.db-wal",   # SQLite's working side-files
+        "tax/hostlyft_tax.db-shm",
+        "tax/wise_private_key.pem",
+        "tax/imports/capitalone.csv",
+        ".venv/x",
+    ],
 )
 def test_git_refuses_to_track_private_files(path):
     """

@@ -85,6 +85,8 @@ python -m pytest
 | `.env.example` | Blank template naming every secret and where to get it. Safe for GitHub. |
 | `taxlib/` | Shared code — settings, currency, categorisation, notifications. |
 | `taxlib/config.py` | Paths, secret-reading, and your tax settings. Everything else asks this file. |
+| `taxlib/db.py` | The database: its layout, and every read and write. |
+| `scripts/init_db.py` | Creates the database, or reports what's in it. |
 | `scripts/` | The things you actually run — pulling from Stripe, calculating tax, sending reminders. |
 | `tests/` | The automatic checks. |
 | `tax/` | **Your private data.** Secrets and database. Never uploaded. |
@@ -109,12 +111,85 @@ worst kind of failure, because you'd never know it stopped.
 
 ---
 
+## The database
+
+One ordinary file: `tax/hostlyft_tax.db`.
+
+It uses **SQLite** — a complete database that lives entirely inside a single
+file. Nothing to install, no server to keep running, no account, no monthly fee.
+Python has it built in. Copying that one file is a complete backup.
+
+Create it, or see what's in it:
+
+```
+python scripts/init_db.py            # create it (safe to re-run)
+python scripts/init_db.py --show     # just report, change nothing
+python scripts/init_db.py --year 2026
+```
+
+### The five tables
+
+| Table | What it holds |
+|---|---|
+| `income` | Money you earned. Stored **gross** — see below. |
+| `expenses` | Money you spent that reduces taxable profit. |
+| `stripe_payouts` | **Not income.** The reference list that stops money being counted twice. |
+| `fx_rates` | Every exchange rate ever used, saved. |
+| `alerts_sent` | Reminders already sent, so each fires once. |
+
+### Income is stored gross, never net
+
+A $2,000 invoice with a $60 Stripe fee is income of **$2,000** *plus* a
+deductible expense of **$60**. It is never income of $1,940.
+
+Schedule C asks for gross receipts. Recording the net figure silently throws
+away the $60 deduction — you'd pay tax on money you never received.
+
+### Why `stripe_payouts` exists
+
+Stripe reports a $2,000 invoice. Six days later Stripe sends $1,940 onward and
+Wise reports it arriving. Added up naively that is **$3,940** — tax on nearly
+double what you earned.
+
+Stage 6 checks every incoming Wise payment against the list of Stripe payouts.
+This table is that list; without it there is nothing to compare against. A
+matched credit is still saved, but marked `excluded`, so the decision stays
+visible instead of a transaction quietly disappearing.
+
+### Re-running an import is always safe
+
+Every row carries the system it came from and its ID in that system. Those two
+together must be unique, so importing the same invoice twice **updates** the
+existing row rather than adding a second one. Import as often as you like — the
+totals will not move. A test proves this by importing the same data three times
+and checking the totals are identical.
+
+### Rounding
+
+Money is rounded with a half always going **up**. Python's built-in `round()`
+rounds a halfway value to the nearest *even* number — `round(0.125, 2)` gives
+`0.12`, not `0.13`. Correct for statistics, wrong for money. A test pins this.
+
+### Nothing is guessed
+
+Three flags exist so an uncertain answer is never presented as a certain one:
+
+- `excluded` — deliberately left out of totals, with the reason recorded
+- `needs_review` — the importer was unsure and refused to guess
+- `uncategorized` — no category rule matched yet
+
+`init_db.py --show` reports counts for all three, plus anything not yet
+converted to USD. An entry with no USD figure counts as $0, so it says so rather
+than passing off a partial total as a complete one.
+
+---
+
 ## Build progress
 
 | Stage | What it adds | Status |
 |---|---|---|
 | 1 | Skeleton — setup script, settings, secrets template | ✅ done |
-| 2 | Database — income, expenses, payouts, FX cache, alerts | not started |
+| 2 | Database — income, expenses, payouts, FX cache, alerts | ✅ done |
 | 3 | Secrets walkthrough | not started |
 | 4 | Stripe income (gross, with fees as expenses) | not started |
 | 5 | Currency conversion to USD | not started |

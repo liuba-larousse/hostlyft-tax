@@ -6,6 +6,8 @@
 # The database holding real financial data. Stays on the Mac only.
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 
