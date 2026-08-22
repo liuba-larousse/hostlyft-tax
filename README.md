@@ -79,6 +79,7 @@ python -m pytest
 |---|---|
 | `START-HERE.md` | Mac setup guide — installing Claude Code, GitHub token, downloading the code. |
 | `PLAN.md` | The ten-stage build plan, with the tax research and design decisions already made. |
+| `SECRETS.md` | Walkthrough for putting your API keys in `tax/.env`. |
 | `setup_mac.command` | Double-click to set the project up. Safe to run again. |
 | `run_tests.command` | Double-click to run every automatic check. |
 | `requirements.txt` | The list of libraries to install, with a note on why each is needed. |
@@ -87,6 +88,7 @@ python -m pytest
 | `taxlib/config.py` | Paths, secret-reading, and your tax settings. Everything else asks this file. |
 | `taxlib/db.py` | The database: its layout, and every read and write. |
 | `scripts/init_db.py` | Creates the database, or reports what's in it. |
+| `scripts/check_secrets.py` | Checks `tax/.env` is safe and correctly filled in. |
 | `scripts/` | The things you actually run — pulling from Stripe, calculating tax, sending reminders. |
 | `tests/` | The automatic checks. |
 | `tax/` | **Your private data.** Secrets and database. Never uploaded. |
@@ -103,6 +105,21 @@ python -m pytest
 A test in `tests/test_stage1_config.py` asks git directly whether it would
 ignore `tax/.env`, `tax/hostlyft_tax.db` and the Wise private key. If any answer
 were ever "no", the tests fail.
+
+**Filling them in:** see **[SECRETS.md](SECRETS.md)** for the full walkthrough.
+Then check your work:
+
+```
+python scripts/check_secrets.py             # is it safe, and the right shape?
+python scripts/check_secrets.py --connect   # do the keys actually work?
+```
+
+Neither ever prints a secret — only its shape, e.g. *"starts with `sk_live_`,
+107 characters"*. That output is safe to show to anyone.
+
+**Never paste a key into a chat, document or email.** If you do, don't try to
+delete the message — go and **roll** the key at the service. The old one dies
+instantly. It's free, takes ten seconds, and is completely routine.
 
 **Why a file rather than exports in `~/.zshrc`:** the scheduled 9am reminder
 runs under `cron`, and cron does not load your shell settings. Anything exported
@@ -190,7 +207,7 @@ than passing off a partial total as a complete one.
 |---|---|---|
 | 1 | Skeleton — setup script, settings, secrets template | ✅ done |
 | 2 | Database — income, expenses, payouts, FX cache, alerts | ✅ done |
-| 3 | Secrets walkthrough | not started |
+| 3 | Secrets walkthrough | ✅ done |
 | 4 | Stripe income (gross, with fees as expenses) | not started |
 | 5 | Currency conversion to USD | not started |
 | 6 | Wise + double-count prevention | not started |
