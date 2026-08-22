@@ -91,6 +91,8 @@ python -m pytest
 | `scripts/check_secrets.py` | Checks `tax/.env` is safe and correctly filled in. |
 | `scripts/pull_stripe.py` | Imports Stripe income, fees and payouts. |
 | `taxlib/stripe_import.py` | The rules deciding what counts as income. |
+| `taxlib/fx.py` | Currency conversion, and the saved rates. |
+| `scripts/convert_currency.py` | Puts a US dollar figure on every foreign entry. |
 | `scripts/` | The things you actually run — pulling from Stripe, calculating tax, sending reminders. |
 | `tests/` | The automatic checks. |
 | `tax/` | **Your private data.** Secrets and database. Never uploaded. |
@@ -271,6 +273,82 @@ leaving money out of the totals.
 
 ---
 
+## Currency conversion
+
+```
+python scripts/convert_currency.py --dry-run   # show, change nothing
+python scripts/convert_currency.py             # convert for real
+python scripts/convert_currency.py --rates     # list the rates saved
+```
+
+Rates come from the **Frankfurter API** — free with no key, no signup, no quota
+and no card, because it's a thin public wrapper over the reference rates the
+**European Central Bank** publishes daily as a public service. History back to
+1999.
+
+### Both amounts are always kept
+
+The original amount and currency are never touched. The dollar figure is stored
+*next to* them, along with the rate used and the date that rate came from. You
+can always check the working.
+
+### The ECB only publishes on business days
+
+There's no rate for a Saturday, a Sunday, Christmas Day or Easter Monday. The
+previous business day's rate is used, and **both dates are recorded**:
+
+```
+2026-08-08   9.00 EUR  ->  $10.38   rate 1.1535 from 2026-08-07  <- 1d earlier
+```
+
+A gap of one to four days is a normal weekend or public holiday. Anything longer
+is flagged for you to look at.
+
+### A future date returns a stale rate — silently
+
+Asked for a date a week from now, the service returns **200 OK with last
+Friday's rate** and no warning whatsoever. A mistyped year would quietly produce
+a wrong but entirely plausible number.
+
+So future dates are refused here, before the request is ever made.
+
+### Unsupported currencies fail loudly
+
+The ECB covers about 30 currencies. USD, EUR and GBP are all included. Anything
+else stops with an explanation and a suggestion — it is never guessed. A wrong
+rate on a tax return with nothing to show it was a guess is far worse than an
+honest gap.
+
+### Re-importing doesn't undo the conversion
+
+Stage 4 imports a €900 invoice with no dollar figure — it doesn't know the rate.
+Stage 5 works it out. Then Stage 4 runs again, still offering no dollar figure.
+
+Handled naively, that second import **erases the conversion**, and the totals
+silently drop back to counting the invoice as $0. Nothing errors; the number is
+just quietly wrong.
+
+So a re-import keeps the conversion — but **only while the amount and currency
+are unchanged**. If Stripe ever corrects an invoice from €900 to €1,000, the old
+dollar figure is now wrong, so it's cleared and worked out again. A stale
+conversion would be worse than none.
+
+### The simpler official alternative
+
+The IRS also publishes a **single yearly average rate** per currency and accepts
+it for translating foreign income, as long as you're consistent:
+
+> *"Yearly average currency exchange rates"* —
+> https://www.irs.gov/individuals/international-taxpayers/yearly-average-currency-exchange-rates
+
+Daily rates are more precise and are what this tool uses. If daily ever becomes
+more maintenance than it's worth, the yearly average is the sanctioned fallback:
+one number per currency per year, applied to every transaction in that currency.
+Pick one method and stay with it — mixing them within a year is what causes
+problems.
+
+---
+
 ## Build progress
 
 | Stage | What it adds | Status |
@@ -279,7 +357,7 @@ leaving money out of the totals.
 | 2 | Database — income, expenses, payouts, FX cache, alerts | ✅ done |
 | 3 | Secrets walkthrough | ✅ done |
 | 4 | Stripe income (gross, with fees as expenses) | ✅ done |
-| 5 | Currency conversion to USD | not started |
+| 5 | Currency conversion to USD | ✅ done |
 | 6 | Wise + double-count prevention | not started |
 | 7 | Capital One one-time CSV import | not started |
 | 8 | Categorization | not started |

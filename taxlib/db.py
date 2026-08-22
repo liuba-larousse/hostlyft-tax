@@ -328,7 +328,12 @@ def table_names(connection):
 # These are "upserts": update if the row already exists, insert if it doesn't.
 # That single behaviour is what makes re-running an import harmless.
 
-def _upsert(connection, table, keys, values):
+# Columns holding the result of a currency conversion. They need special
+# handling on a re-import - see _upsert() below.
+_CONVERSION_COLUMNS = ("amount_usd", "fx_rate", "fx_date")
+
+
+def _upsert(connection, table, keys, values, protect_conversion=False):
     """
     Shared machinery behind the three upsert functions below.
 
@@ -338,6 +343,20 @@ def _upsert(connection, table, keys, values):
     On a repeat, every value column is refreshed and updated_at is stamped,
     but created_at keeps its original time so you can still see when a
     transaction first appeared.
+
+    PROTECTING THE CURRENCY CONVERSION
+        Stage 4 imports a EUR 900 invoice with no dollar figure - it doesn't
+        know the rate. Stage 5 works the rate out and fills it in. Then
+        Stage 4 runs again, once more offering no dollar figure.
+
+        Handled naively, that second import erases the conversion, and the
+        totals silently drop back to counting that invoice as $0.
+
+        So on a re-import the conversion is kept - but ONLY while the amount
+        and currency are unchanged. If Stripe ever corrects an invoice from
+        EUR 900 to EUR 1,000, the old dollar figure is now wrong, so it is
+        cleared and Stage 5 works it out again. Keeping a stale conversion
+        would be worse than having none.
     """
     now = _now()
     all_columns = {**keys, **values, "created_at": now, "updated_at": now}
@@ -347,12 +366,24 @@ def _upsert(connection, table, keys, values):
     conflict_columns = ", ".join(keys)
 
     # On a clash, refresh the value columns - but never created_at.
-    updates = ", ".join(f"{c} = excluded.{c}" for c in values)
-    updates += ", updated_at = excluded.updated_at"
+    assignments = []
+    for column in values:
+        if protect_conversion and column in _CONVERSION_COLUMNS:
+            assignments.append(
+                f"{column} = CASE"
+                f" WHEN excluded.{column} IS NOT NULL THEN excluded.{column}"
+                f" WHEN {table}.amount = excluded.amount"
+                f"  AND {table}.currency = excluded.currency"
+                f"  THEN {table}.{column}"
+                f" ELSE NULL END"
+            )
+        else:
+            assignments.append(f"{column} = excluded.{column}")
+    assignments.append("updated_at = excluded.updated_at")
 
     connection.execute(
         f"INSERT INTO {table} ({column_list}) VALUES ({placeholders}) "
-        f"ON CONFLICT({conflict_columns}) DO UPDATE SET {updates}",
+        f"ON CONFLICT({conflict_columns}) DO UPDATE SET {', '.join(assignments)}",
         tuple(all_columns.values()),
     )
     return connection
@@ -391,6 +422,7 @@ def upsert_income(connection, *, source, source_id, date, amount, currency,
             "needs_review": 1 if needs_review else 0,
             "review_note": review_note,
         },
+        protect_conversion=True,
     )
 
 
@@ -420,6 +452,7 @@ def upsert_expense(connection, *, source, source_id, date, amount, currency,
             "needs_review": 1 if needs_review else 0,
             "review_note": review_note,
         },
+        protect_conversion=True,
     )
 
 
