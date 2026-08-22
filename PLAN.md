@@ -96,6 +96,41 @@ that allows it.** A missing W-9 TIN triggers **24% backup withholding**.
 1099-NEC reportable at all — https://www.irs.gov/instructions/i1099mec. Default to
 issuing.
 
+### 6. There are TWO businesses, not one — Marcus is not Hostlyft work
+
+Marcus pays **$4,000/month (~$48,000/yr)** into her **personal** Wise account, and
+that work is done **independently, not through Hostlyft LLC**.
+
+**This must be in the tax calculation.** A single-member LLC is a disregarded
+entity, so both businesses land on the same 1040 anyway, and:
+
+- **SE tax is computed on combined net earnings**, not per business
+- The **$132,900 FEIE cap** and **$184,500 Social Security cap** are combined
+  limits, not per-business
+
+Omitting Marcus would understate SE tax by roughly **$6,900**.
+
+**No liability concern.** An earlier draft flagged commingling — that flag was
+based on the assumption Marcus was LLC work and is **resolved**. No LLC money runs
+through the personal account. Do not raise it again.
+
+**Schedule C is an open decision.** She describes the Marcus work as "related but
+not identical" to Hostlyft's revenue management. That's a genuine judgement call
+between one Schedule C and two. Tag rows so it can be filed either way, and raise
+it as a decision to make **before filing**, not now. Total tax is the same either
+way; only expense attribution differs.
+
+**Her sheet currently books Marcus inside Hostlyft's totals**
+(`INCOME — Marcus (Flat, USD, 100% to Liuba)` feeding `TOTAL INCOME BY CURRENCY`),
+which overstates Hostlyft revenue by ~$48k. She chose to **report them
+separately** — Hostlyft totals exclude Marcus, with a combined figure for tax.
+Fix this in the new tabs; **do not edit her existing tabs**.
+
+**Money stays in the personal account** — she does not transfer it to the business
+account, so there is no personal→business internal transfer to match.
+
+---
+
 ---
 
 ## Her Google Sheet — extend it, never rebuild it
@@ -151,9 +186,12 @@ libraries to this folder.
 SQLite = a complete database in one ordinary file (`hostlyft_tax.db`). No server,
 no signup, no fee — explain it that way.
 
-Her two required tables:
-- `income` — date, amount, currency, amount_usd, source, description
-- `expenses` — date, amount, currency, amount_usd, category, description, vendor
+Her two required tables, each with an added **`business`** column
+(`hostlyft` | `marcus`) so the two income streams report separately while the tax
+calculator still sums both:
+- `income` — date, amount, currency, amount_usd, source, description, **business**
+- `expenses` — date, amount, currency, amount_usd, category, description, vendor,
+  **business**
 
 Plus, for correctness:
 - `stripe_payouts` — **not income**; the reference list the double-count check
@@ -195,8 +233,17 @@ authoritative for tax and the sheet's tab is a reference view.
 ### Stage 6 — Wise + double-count prevention
 `wise_keys.py` (keypair generation, per finding 1), then `pull_wise.py`.
 
-- Pull **STANDARD** balances (operating money) and **SAVINGS** balances (jars):
+- `GET /v2/profiles` returns **both** the personal and business profiles for the
+  authenticated user; the SCA keypair is tied to the login, not one profile, so a
+  single token and keypair covers both. **Confirm against her live account** — this
+  could not be called from the planning sandbox.
+- **Business profile:** pull everything — **STANDARD** balances (operating money)
+  and **SAVINGS** balances (jars):
   `GET /v4/profiles/{profileId}/balances?types=SAVINGS` returns each with its `name`
+- **Personal profile: read narrowly.** Pull **only incoming payments matching
+  Marcus**, tagged `business = marcus`. Her personal spending must never be read,
+  stored, or written to the database or the sheet. This was an explicit choice —
+  respect it.
 - Per-jar balances and transaction history
 - Classify every outgoing transfer: contractor withdrawal (match name *and*
   nickname), business expense, or Liuba's own draw
@@ -287,7 +334,8 @@ Ship `verify_brackets.py` printing each number beside the IRS URL.
 `calc_tax.py`, explaining each step in plain terms as it runs:
 
 ```
-net profit = income_usd − expenses_usd
+net profit = (hostlyft income + marcus income) − expenses_usd
+             ← BOTH businesses; SE tax is on combined net earnings
              ← expenses use ACTUAL WITHDRAWALS, not the sheet's
                lagged payout allocations (finding 4)
 SE tax     = 15.3% × (92.35% × net profit)
@@ -339,8 +387,11 @@ cron fired.
 
 Writes **new tabs only**:
 
-- `Raw_Income`, `Raw_Expenses` — every Stripe and Wise transaction, with dates and
-  source IDs
+- `Raw_Income`, `Raw_Expenses` — every Stripe and Wise transaction, with dates,
+  source IDs and the `business` tag
+- `Business_Summary` — three views: **Hostlyft only** (excluding Marcus, so the
+  P&L she uses for team splits is honest), **Marcus only**, and **combined** for
+  tax
 - `Reconciliation` — per person: **running cumulative earned, cumulative withdrawn,
   current jar balance, and the gap**. She chose a running balance over
   month-by-month, since monthly mismatches are expected and noisy
@@ -377,6 +428,8 @@ Each stage ships tests runnable in one command:
 10. Dry run proving no existing tab is modified — diff the sheet before and after
 11. $600 alert fires on **withdrawals**, not jar allocations
 12. Katerina's row → 1099-NEC alert; other three → W-8BEN reminders, no 1099
+13. Marcus income is included in the tax total but excluded from Hostlyft-only
+    reporting; personal-account rows other than Marcus are never stored
 
 ## Out of scope — flag, don't guess
 
@@ -384,3 +437,8 @@ French income tax and French social contributions (her likely larger exposure),
 Foreign Tax Credit modelling (nothing to credit — she pays no French income tax),
 US state tax, home-office/vehicle/mileage/depreciation, filing anything, paying
 anyone. Also out of scope: advising Katerina on her own US filing — that is hers.
+
+**One decision to raise before she files, not now:** whether the Marcus work is the
+same trade or business as Hostlyft (one Schedule C) or a separate one (two
+Schedule Cs). She described it as "related but not identical". Total tax is
+identical either way; only expense attribution differs.
