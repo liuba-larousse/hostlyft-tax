@@ -1,0 +1,29 @@
+# Secrets — API tokens for Stripe, Wise, Gmail. NEVER commit.
+.env
+.env.*
+!.env.example
+
+# The database holding real financial data. Stays on the Mac only.
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Wise SCA private key — signing key, never leaves the Mac.
+*.pem
+wise_private_key*
+wise_public_key*
+
+# Exported bank/card statements
+*.csv
+!tests/fixtures/*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# macOS
+.DS_Store
