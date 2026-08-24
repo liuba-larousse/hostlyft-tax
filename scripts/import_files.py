@@ -36,7 +36,7 @@ def main():
     print("=" * 74)
 
     connection = db.init_db()
-    all_income, notes = [], []
+    all_income, all_expenses, notes = [], [], []
 
     # ---- HubSpot ----
     hubspot_file = config.IMPORTS_DIR / "hubspot_invoices_2026.csv"
@@ -59,24 +59,39 @@ def main():
         print(f"\n{YELLOW}No HubSpot file at {hubspot_file}{OFF}")
 
     # ---- Upwork ----
-    upwork_files = sorted(
-        f for f in glob.glob(str(config.IMPORTS_DIR / "*.csv"))
-        if "hubspot" not in Path(f).name.lower())
-    if upwork_files:
-        result = csv_import.build_upwork_records(
-            csv_import.read_upwork(upwork_files), year=args.year)
+    candidates = [f for f in sorted(glob.glob(str(config.IMPORTS_DIR / "*.csv")))
+                  if "hubspot" not in Path(f).name.lower()]
+    reports = [f for f in candidates if csv_import.is_transaction_report(f)]
+    summaries = [f for f in candidates if f not in reports]
+
+    if reports:
+        rows = []
+        for path in reports:
+            rows += csv_import.read_upwork_transactions(path)
+        result = csv_import.build_upwork_records(rows, year=args.year)
         all_income += result["income"]
+        all_expenses += result["expenses"]
         notes += result["notes"]
+
         gross = sum(r["amount"] for r in result["income"])
-        print(f"\n{BOLD}UPWORK{OFF}  {len(result['income'])} earnings from "
-              f"{len(upwork_files)} file(s)")
-        print(f"   USD {gross:>12,.2f}  gross")
-        if result["unmapped"]:
-            print(f"\n   {YELLOW}contracts with no client yet - counted under "
-                  f"Hostlyft, flagged for review:{OFF}")
-            for name, total in sorted(result["unmapped"].items(),
-                                      key=lambda kv: -kv[1]):
-                print(f"      ${total:>9,.2f}  {name[:60]}")
+        fees = sum(r["amount"] for r in result["expenses"])
+        print(f"\n{BOLD}UPWORK{OFF}  transaction report")
+        print(f"   USD {gross:>12,.2f}  gross earnings")
+        print(f"   USD {fees:>12,.2f}  fees and sales tax (deductible)")
+        print(f"\n   by client:")
+        for name, info in sorted(result["clients"].items(),
+                                 key=lambda kv: -kv[1]["total"]):
+            print(f"      ${info['total']:>10,.2f}  {info['business']:<9} "
+                  f"{name[:44]}")
+        if summaries:
+            print(f"\n   {YELLOW}{len(summaries)} weekly-summary export(s) "
+                  f"ignored - the transaction report covers the same period "
+                  f"and also has the fees. Using both would double-count.{OFF}")
+    elif summaries:
+        print(f"\n{YELLOW}Only weekly-summary exports found. Those have no "
+              f"fee column.{OFF}")
+        print(f"{YELLOW}Export Upwork's TRANSACTION REPORT instead - it has "
+              f"fees and client names.{OFF}")
     else:
         print(f"\n{YELLOW}No Upwork files in {config.IMPORTS_DIR}{OFF}")
 
@@ -90,12 +105,23 @@ def main():
         connection.close()
         return 0
 
+    # File imports REPLACE what came from that source rather than merging.
+    # The file is the whole truth for it, so a row dropped from a corrected
+    # export must disappear here too - and an earlier import that used a
+    # different id scheme must not linger as a duplicate.
+    for source in ("hubspot", "upwork"):
+        connection.execute("DELETE FROM income WHERE source = ?", (source,))
+        connection.execute("DELETE FROM expenses WHERE source = ?", (source,))
+
     for row in all_income:
         db.upsert_income(connection, **row)
+    for row in all_expenses:
+        db.upsert_expense(connection, **row)
     connection.commit()
 
     figures = db.totals(connection, args.year)
-    print(f"{GREEN}{BOLD}Imported {len(all_income)} income rows.{OFF}")
+    print(f"{GREEN}{BOLD}Imported {len(all_income)} income rows and "
+          f"{len(all_expenses)} expense rows.{OFF}")
     print(f"\n   income      ${figures['income_usd']:>12,.2f}")
     print(f"   expenses    ${figures['expenses_usd']:>12,.2f}")
     print(f"   net profit  ${figures['net_profit_usd']:>12,.2f}")

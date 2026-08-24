@@ -80,95 +80,126 @@ def build_hubspot_records(rows, year=None):
 # ===========================================================================
 #  UPWORK
 # ===========================================================================
+#
+# Upwork offers two exports and they are NOT equivalent:
+#
+#   Weekly summary      date, contract, amount. Gross only - no fees.
+#   Transaction report  every ledger line: earnings, service fees, sales tax,
+#                       withdrawals, AND the client name on each one.
+#
+# The transaction report is used whenever it is present, because it carries
+# the fees (a real deduction) and the client (which decides whether the work
+# is Hostlyft's or the separate Marcus work).
+#
+# Using both would double-count everything they overlap on, so the weekly
+# summaries are ignored for any period the transaction report covers.
 
-# Upwork's published freelancer fee. Used ONLY to show roughly what is
-# missing - never written to the database as if it were a real figure.
-UPWORK_HEADLINE_FEE = 0.10
+# Upwork's client names, and which business each one's work belongs to.
+# Taken from the "Client team" column, so new clients appear by themselves.
+UPWORK_CLIENT_BUSINESS = {
+    # Marcus Halawi trades as Cloud 9 - this is the separate Marcus work.
+    "the cloud nine team": config.BUSINESS_MARCUS,
+}
 
-# Which contract belongs to which client. Contract names are stable, so this
-# is filled in once per contract and never again. Anything not listed is
-# flagged rather than guessed - Upwork mixes two businesses.
-UPWORK_CONTRACTS = {}
-
-
-def contract_id(name):
-    """"OTA Optimization (42772450)" -> "42772450"."""
-    found = re.search(r"\((\d+)\)\s*$", name or "")
-    return found.group(1) if found else None
+EARNING_TYPES = {"hourly", "fixed-price", "bonus"}
+FEE_TYPES = {"service fee", "state sales tax"}
+# Moving money to her own bank. Not an expense; the Wise credit is handled
+# separately as an internal transfer.
+TRANSFER_TYPES = {"withdrawal"}
 
 
-def read_upwork(paths):
-    """Read one or more Upwork report exports, dropping exact duplicates."""
-    seen, rows = set(), []
-    for path in paths:
-        with open(path, newline="", encoding="utf-8-sig") as handle:
-            for row in csv.DictReader(handle):
-                if not row.get("Date") or not row.get("Amount"):
-                    continue
-                key = (row["Date"], row["Contract"], row["Amount"],
-                       row.get("Payment type", ""))
-                if key in seen:
-                    continue
-                seen.add(key)
-                rows.append(row)
-    return rows
+def _upwork_date(text):
+    """Upwork writes "Aug 21, 2026"."""
+    import datetime as dt
+    try:
+        return dt.datetime.strptime((text or "").strip().strip('"'),
+                                    "%b %d, %Y").date().isoformat()
+    except ValueError:
+        return None
+
+
+def is_transaction_report(path):
+    """Tell the two export formats apart by their columns."""
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        header = handle.readline()
+    return "Transaction type" in header
+
+
+def read_upwork_transactions(path):
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        return list(csv.DictReader(handle))
+
+
+def business_for_client(client):
+    """Which business an Upwork client's work belongs to."""
+    low = (client or "").strip().lower()
+    for pattern, business in UPWORK_CLIENT_BUSINESS.items():
+        if pattern in low:
+            return business
+    return config.BUSINESS_HOSTLYFT
 
 
 def build_upwork_records(rows, year=None):
     """
-    One income row per Upwork earning, at GROSS.
+    Turn the transaction report into income and expense rows.
 
-    What reaches the bank is net of Upwork's cut, so the bank figure would
-    understate gross receipts AND lose the fee deduction.
+    Earnings are recorded GROSS. Upwork's service fee and the sales tax it
+    charges on that fee are separate deductible expenses - which is exactly
+    the treatment Stripe gets, and exactly what the bank figure alone would
+    have thrown away.
 
-    Every row is tagged to a business from UPWORK_CONTRACTS. Anything not
-    listed is flagged for review: Upwork carries both Hostlyft work and the
-    separate Marcus work, and a single payout can contain both.
+    Withdrawals are skipped: that is money moving to her own bank, not a
+    cost.
     """
-    income, notes = [], []
-    unmapped = {}
+    income, expenses, notes = [], [], []
+    clients = {}
 
     for row in rows:
-        date = row["Date"]
-        if year and not date.startswith(str(year)):
+        date = _upwork_date(row.get("Date"))
+        if not date or (year and not date.startswith(str(year))):
             continue
 
-        contract = row["Contract"]
-        cid = contract_id(contract)
-        amount = float(row["Amount"])
-        kind = row.get("Payment type") or "Hourly"
+        kind = (row.get("Transaction type") or "").strip().lower()
+        amount = float(row.get("Amount $") or 0)
+        contract = (row.get("Transaction summary") or "").strip()
+        client = (row.get("Client team") or "").strip()
+        txn_id = row.get("Ref ID") or row.get("Transaction ID") or ""
 
-        mapping = UPWORK_CONTRACTS.get(cid)
-        if mapping:
-            client, business = mapping
-            needs_review, note = False, None
-        else:
-            client, business = None, config.BUSINESS_HOSTLYFT
-            needs_review = True
-            note = (f"Upwork contract {cid} is not mapped to a client yet. "
-                    f"Counted under Hostlyft; if this work is Marcus's the "
-                    f"business tag is wrong. Tell Claude whose it is.")
-            unmapped[contract] = unmapped.get(contract, 0) + amount
+        if kind in TRANSFER_TYPES:
+            continue
 
-        income.append({
-            "source": "upwork",
-            "source_id": f"upwork:{date}:{cid or 'x'}:{amount:.2f}",
-            "business": business, "date": date,
-            "amount": amount, "currency": "USD", "amount_usd": amount,
-            "description": f"{contract[:120]} [{kind}]",
-            "payer": client,
-            "needs_review": needs_review, "review_note": note,
-        })
+        if kind in EARNING_TYPES:
+            business = business_for_client(client)
+            clients.setdefault(client or "(none)", {"total": 0.0,
+                                                    "business": business})
+            clients[client or "(none)"]["total"] += amount
+            income.append({
+                "source": "upwork", "source_id": f"upwork:{txn_id}",
+                "business": business, "date": date,
+                "amount": amount, "currency": "USD", "amount_usd": amount,
+                "description": f"{contract[:110]} [{row.get('Transaction type')}]",
+                "payer": client or None,
+            })
+            continue
+
+        if kind in FEE_TYPES:
+            expenses.append({
+                "source": "upwork", "source_id": f"upwork:{txn_id}",
+                "business": business_for_client(client), "date": date,
+                "amount": abs(amount), "currency": "USD",
+                "amount_usd": abs(amount),
+                "category": "payment processing", "vendor": "Upwork",
+                "description": f"{row.get('Transaction type')} - {contract[:70]}",
+            })
+            continue
+
+        notes.append(f"Upwork transaction type '{row.get('Transaction type')}' "
+                     f"on {date} was not imported - tell Claude about it.")
 
     gross = sum(r["amount"] for r in income)
-    notes.append(
-        f"This export is Upwork's WEEKLY SUMMARY, which has no fee column. "
-        f"Gross of ${gross:,.2f} is recorded correctly, but roughly "
-        f"${gross * UPWORK_HEADLINE_FEE:,.2f} of deductible Upwork fees are "
-        f"missing. Upwork's TRANSACTION HISTORY report does include fees.")
+    fees = sum(r["amount"] for r in expenses)
+    notes.insert(0, f"Upwork: ${gross:,.2f} gross earnings and ${fees:,.2f} of "
+                    f"deductible fees, taken from the transaction report.")
 
-    if unmapped:
-        notes.append(f"{len(unmapped)} contracts are unmapped - see the "
-                     f"review list below.")
-
-    return {"income": income, "notes": notes, "unmapped": unmapped}
+    return {"income": income, "expenses": expenses, "notes": notes,
+            "clients": clients}
