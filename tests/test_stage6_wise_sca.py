@@ -1,0 +1,168 @@
+"""
+Automatic checks for the Wise signing half of Stage 6.
+
+No Wise account, no token, no internet - these test the cryptography only.
+
+The point: a broken key pair should be caught here, in a second, rather than
+turning up later as a baffling 403 that looks like a wrong password.
+"""
+
+import base64
+
+import pytest
+from cryptography.hazmat.primitives import serialization
+
+from taxlib import wise_sca
+
+
+@pytest.fixture(scope="module")
+def keypair():
+    """One key pair for the whole file - generating them is slow."""
+    private_pem, public_pem = wise_sca.generate_keypair()
+    private_key = serialization.load_pem_private_key(private_pem, password=None)
+    return private_key, private_pem, public_pem
+
+
+# ---------------------------------------------------------------------------
+#  Making the keys
+# ---------------------------------------------------------------------------
+
+def test_the_pair_is_in_the_formats_wise_expects(keypair):
+    _, private_pem, public_pem = keypair
+
+    # The private key must NOT be passphrase-protected: the scheduled 9am
+    # job runs unattended and has nobody to ask for one.
+    assert private_pem.startswith(b"-----BEGIN PRIVATE KEY-----")
+
+    # The public key is what gets pasted into the Wise settings box.
+    assert public_pem.startswith(b"-----BEGIN PUBLIC KEY-----")
+    assert public_pem.rstrip().endswith(b"-----END PUBLIC KEY-----")
+
+
+def test_the_key_is_long_enough(keypair):
+    """Wise requires at least 2048 bits."""
+    private_key, _, _ = keypair
+    assert private_key.key_size >= 2048
+
+
+def test_two_pairs_are_never_the_same():
+    first, _ = wise_sca.generate_keypair()
+    second, _ = wise_sca.generate_keypair()
+    assert first != second
+
+
+# ---------------------------------------------------------------------------
+#  Signing - the plan's test 4
+# ---------------------------------------------------------------------------
+
+def test_a_signature_verifies_against_its_own_public_key(keypair):
+    """
+    Sign a one-time code, then check it exactly the way Wise will. If this
+    passes, a 403 that persists is a setup problem at the Wise end, not a
+    problem with the maths here.
+    """
+    private_key, _, public_pem = keypair
+    one_time_token = "8e2a1f60-3d4b-4c8e-9f11-7a5b2c9d0e33"
+
+    signature = wise_sca.sign_token(private_key, one_time_token)
+
+    assert wise_sca.verify_signature(public_pem, one_time_token, signature)
+
+
+def test_the_signature_is_base64_because_it_travels_in_a_header(keypair):
+    private_key, _, _ = keypair
+    signature = wise_sca.sign_token(private_key, "some-token")
+
+    # must survive a round trip through base64, and be plain ASCII
+    assert base64.b64encode(base64.b64decode(signature)).decode() == signature
+    signature.encode("ascii")
+
+
+def test_a_different_code_is_rejected(keypair):
+    """
+    A signature proves you signed THAT code. Reusing it for another must
+    fail, or the whole exercise would be pointless.
+    """
+    private_key, _, public_pem = keypair
+    signature = wise_sca.sign_token(private_key, "the-real-code")
+
+    assert not wise_sca.verify_signature(public_pem, "a-different-code",
+                                         signature)
+
+
+def test_a_signature_from_the_wrong_key_is_rejected(keypair):
+    """The situation after --replace without re-uploading the public key."""
+    _, _, public_pem = keypair
+
+    other_private_pem, _ = wise_sca.generate_keypair()
+    other_key = serialization.load_pem_private_key(other_private_pem,
+                                                   password=None)
+    signature = wise_sca.sign_token(other_key, "the-code")
+
+    assert not wise_sca.verify_signature(public_pem, "the-code", signature)
+
+
+def test_a_tampered_signature_is_rejected(keypair):
+    private_key, _, public_pem = keypair
+    signature = wise_sca.sign_token(private_key, "the-code")
+
+    tampered = ("B" if signature[0] != "B" else "C") + signature[1:]
+    assert not wise_sca.verify_signature(public_pem, "the-code", tampered)
+
+
+def test_rubbish_instead_of_a_signature_is_rejected_not_crashed_on(keypair):
+    _, _, public_pem = keypair
+    assert not wise_sca.verify_signature(public_pem, "the-code", "not-base64!!")
+
+
+def test_signing_is_repeatable(keypair):
+    """
+    PKCS#1 v1.5 is deterministic: the same code always gives the same
+    signature. So a retry cannot accidentally produce something different.
+    """
+    private_key, _, _ = keypair
+    first = wise_sca.sign_token(private_key, "same-code")
+    second = wise_sca.sign_token(private_key, "same-code")
+    assert first == second
+
+
+def test_signing_nothing_is_refused(keypair):
+    """
+    If Wise ever returns a 403 with no code in it, that must be an obvious
+    error rather than a signature over an empty string.
+    """
+    private_key, _, _ = keypair
+    for empty in ["", None]:
+        with pytest.raises(wise_sca.WiseSigningError):
+            wise_sca.sign_token(private_key, empty)
+
+
+# ---------------------------------------------------------------------------
+#  Loading from disk
+# ---------------------------------------------------------------------------
+
+def test_a_missing_key_file_says_how_to_make_one(tmp_path):
+    with pytest.raises(wise_sca.WiseSigningError) as caught:
+        wise_sca.load_private_key(tmp_path / "nothing.pem")
+    assert "wise_keys.py" in str(caught.value)
+
+
+def test_a_corrupted_key_file_says_how_to_fix_it(tmp_path):
+    broken = tmp_path / "broken.pem"
+    broken.write_text("this is not a key")
+
+    with pytest.raises(wise_sca.WiseSigningError) as caught:
+        wise_sca.load_private_key(broken)
+    assert "--replace" in str(caught.value)
+
+
+def test_a_key_written_and_read_back_still_signs(tmp_path):
+    """The full round trip: generate, save, load, sign, verify."""
+    private_pem, public_pem = wise_sca.generate_keypair()
+    path = tmp_path / "private.pem"
+    path.write_bytes(private_pem)
+
+    loaded = wise_sca.load_private_key(path)
+    signature = wise_sca.sign_token(loaded, "round-trip-code")
+
+    assert wise_sca.verify_signature(public_pem, "round-trip-code", signature)

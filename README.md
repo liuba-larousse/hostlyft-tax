@@ -93,6 +93,8 @@ python -m pytest
 | `taxlib/stripe_import.py` | The rules deciding what counts as income. |
 | `taxlib/fx.py` | Currency conversion, and the saved rates. |
 | `scripts/convert_currency.py` | Puts a US dollar figure on every foreign entry. |
+| `taxlib/wise_sca.py` | Signing, so Wise will release statements. |
+| `scripts/wise_keys.py` | Creates and checks the Wise key pair. |
 | `scripts/` | The things you actually run — pulling from Stripe, calculating tax, sending reminders. |
 | `tests/` | The automatic checks. |
 | `tax/` | **Your private data.** Secrets and database. Never uploaded. |
