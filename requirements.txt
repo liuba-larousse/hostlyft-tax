@@ -34,6 +34,16 @@ urllib3>=1.26.18,<2
 # key and does the signing. (See PLAN.md, finding 1.)
 cryptography>=42.0,<46.0
 
+# --- Stage 11: the Google tax sheet ---
+# Google's official libraries. `google-auth` proves who the service account
+# is; `google-api-python-client` talks to Sheets and Drive.
+#
+# A "service account" is a robot user with its own email address. Google
+# will not let a program open a spreadsheet without an identity of its own -
+# you share the sheet with the robot exactly as you would with a colleague.
+google-auth>=2.28,<3.0
+google-api-python-client>=2.120,<3.0
+
 # --- Testing (every stage) ---
 # Runs the automatic checks that prove the numbers are right, e.g. that a
 # $2,000 invoice is counted once and not twice.
