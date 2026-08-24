@@ -125,6 +125,11 @@ def check_google_sheet_id(value):
 
 
 def check_service_account_json(value):
+    """
+    No longer used. Hostlyft's Google Workspace blocks service-account keys
+    by policy, so the tool signs in as Liuba instead - see gsheets.py.
+    Kept because the check is still correct if that policy ever changes.
+    """
     # This one is a PATH to a file, not a secret in itself.
     path = Path(value)
     if not path.is_absolute():
@@ -157,8 +162,6 @@ SECRETS = [
     ("GMAIL_ADDRESS",      "Stage 10 email reminders",  check_gmail_address),
     ("GMAIL_APP_PASSWORD", "Stage 10 email reminders",  check_app_password),
     ("GOOGLE_SHEET_ID",    "Stage 11 Google Sheet",     check_google_sheet_id),
-    ("GOOGLE_SERVICE_ACCOUNT_JSON",
-                           "Stage 11 Google Sheet",     check_service_account_json),
 ]
 
 

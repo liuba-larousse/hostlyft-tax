@@ -495,7 +495,6 @@ _SECRET_STAGES = [
     ("GMAIL_ADDRESS", "Stage 10 - email reminders"),
     ("GMAIL_APP_PASSWORD", "Stage 10 - email reminders"),
     ("GOOGLE_SHEET_ID", "Stage 11 - Google Sheet tabs"),
-    ("GOOGLE_SERVICE_ACCOUNT_JSON", "Stage 11 - Google Sheet tabs"),
 ]
 
 

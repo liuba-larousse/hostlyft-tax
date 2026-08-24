@@ -213,12 +213,18 @@ def test_pasting_the_whole_sheet_address_is_caught():
     assert "/d/" in message
 
 
-def test_a_service_account_file_that_is_not_there_yet_is_not_an_error(tmp_path):
-    """Blank until Stage 11 is reached. That is expected, not a failure."""
-    status, message = check_secrets.check_service_account_json(
-        str(tmp_path / "nope.json"))
-    assert status == check_secrets.BLANK
-    assert "Stage 11" in message
+def test_google_now_uses_a_sign_in_not_a_service_account_key():
+    """
+    Hostlyft's Google Workspace blocks service-account keys by policy
+    (iam.disableServiceAccountKeyCreation, applied automatically under
+    Google's Secure by Default enforcement).
+
+    So GOOGLE_SERVICE_ACCOUNT_JSON must NOT be asked for - the tool signs
+    in as Liuba instead, and the token lives in tax/ under a fixed name.
+    """
+    names = [name for name, _stage, _checker in check_secrets.SECRETS]
+    assert "GOOGLE_SERVICE_ACCOUNT_JSON" not in names
+    assert "GOOGLE_SHEET_ID" in names
 
 
 def test_the_wrong_kind_of_google_key_file_is_caught(tmp_path):

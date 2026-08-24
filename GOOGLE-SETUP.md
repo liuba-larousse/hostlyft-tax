@@ -1,10 +1,9 @@
 # Connecting to Google Sheets — a walkthrough
 
-About 15 minutes, all on the Google Cloud website. It creates a **robot user**
-that can read and write one folder of your Drive, and nothing else.
+About 10 minutes, all on the Google Cloud website.
 
-Run the checker after each step. It stops at the first thing that's wrong and
-tells you what to do:
+Run the checker whenever you want to see where you've got to. It stops at the
+first thing that's wrong and tells you what to do:
 
 ```
 cd ~/Documents/hostlyft-tax
@@ -14,170 +13,164 @@ python scripts/check_google.py
 
 ---
 
-## Why this is needed at all
+## Why this isn't a service account
 
-Google won't let a program open a spreadsheet just because *you* can see it.
-The program needs an identity of its own — a **service account**, which is a
-robot user with its own email address, something like:
+The original plan used a **service account** — a robot user you share a folder
+with. Your Google Workspace blocks those:
 
 ```
-hostlyft-tax@hostlyft-tax-2026.iam.gserviceaccount.com
+Service account key creation is disabled
+iam.disableServiceAccountKeyCreation
 ```
 
-You then **share your folder with that address**, exactly as you'd share it
-with a colleague. The robot can only ever see what you've shared. Nothing else
-in your Drive is reachable.
+That's applied automatically to new organisations under Google's "Secure by
+Default" enforcement. Nothing has gone wrong.
 
-It's needed for three things: reading the notes inside your tabs, creating the
-tax sheet, and writing to it.
+So the tool **signs in as you** instead, once, in a browser. Google recommends
+this over service-account keys anyway: there's no long-lived private key sitting
+on disk, only a token you can revoke from your account page at any moment.
+
+### What it can reach
+
+**One permission: read and write Google Sheets.** Not Drive, not your documents,
+not your photos, not your folders.
+
+That narrowness costs one small thing, and it's worth knowing up front: a newly
+created spreadsheet lands at the **top level of My Drive** rather than inside a
+folder, because putting it in a folder would need Drive access. You drag it
+across once. That seemed a much better trade than handing a background job
+access to every file you own.
+
+Withdraw it any time at **myaccount.google.com/permissions**.
 
 ---
 
 ## Step 1 — Create a project
 
-1. Go to **console.cloud.google.com**
-2. Sign in as **team@hostlyft.com** — the account that owns the sheet
-3. At the top, click the project dropdown → **New Project**
-4. Name: `hostlyft-tax` · **Create**
-5. Wait a few seconds, then make sure the dropdown shows `hostlyft-tax`
+1. **console.cloud.google.com**, signed in as **team@hostlyft.com**
+2. Project dropdown at the top → **New Project**
+3. Name: `hostlyft-tax` → **Create**
+4. Make sure the dropdown then shows `hostlyft-tax`
 
-> A "project" is just a container. It's free, and nothing here costs money —
-> the Sheets API has a generous free quota and this tool makes a handful of
-> calls a day.
-
-**If it asks for billing:** you can skip it. The APIs we use don't require it.
+Free. If it asks about billing, skip it — nothing here needs it.
 
 ---
 
-## Step 2 — Switch on the two APIs
+## Step 2 — Switch on the Sheets API
 
-An API is off by default until you enable it for the project.
+1. **APIs & Services** → **Library**
+2. Search **Google Sheets API** → **Enable**
 
-1. Left menu → **APIs & Services** → **Library**
-2. Search **Google Sheets API** → click it → **Enable**
-3. Go back to Library, search **Google Drive API** → click it → **Enable**
-
-Both are needed: Sheets to read and write cells, Drive to find the folder and
-create the new file in it.
+That's the only API needed. The Drive API isn't, because we're not asking for
+Drive access.
 
 ---
 
-## Step 3 — Create the robot user
+## Step 3 — Set up the consent screen
 
-1. Left menu → **IAM & Admin** → **Service Accounts**
-2. **+ Create Service Account**
-3. Name: `hostlyft-tax` — the email is filled in for you
-4. **Create and Continue**
-5. *"Grant this service account access to project"* — **skip it**, click
-   **Continue**. Those roles are about the Cloud project, not your Drive.
-6. *"Grant users access"* — skip, click **Done**
+This is the "an app wants access to your account" page you'll see in a moment.
 
-You'll now see it listed with an email ending
-`.iam.gserviceaccount.com`. **Copy that address** — you need it in step 5.
+1. **APIs & Services** → **OAuth consent screen**
+2. User type: **Internal** → **Create**
+3. App name: `Hostlyft Tax Tracker`
+4. User support email and developer email: **team@hostlyft.com**
+5. **Save and Continue** through the rest, then **Back to Dashboard**
+
+> **Internal matters.** It means only people in your own Workspace can use it —
+> no Google review needed. It also avoids a trap: an **External** app left in
+> "Testing" mode expires its tokens after **7 days**, so the tool would silently
+> stop working a week later. If Internal isn't offered, tell me and we'll handle
+> the External case.
 
 ---
 
-## Step 4 — Download its key
+## Step 4 — Create the app registration
 
-1. Click the service account you just made
-2. Top tabs → **Keys**
-3. **Add Key** → **Create new key** → choose **JSON** → **Create**
+1. **APIs & Services** → **Credentials**
+2. **+ Create Credentials** → **OAuth client ID**
+3. Application type: **Desktop app** ← must be Desktop, not Web
+4. Name: `Hostlyft Tax Tracker` → **Create**
+5. In the box that appears, **Download JSON**
 
-A file downloads immediately, named something like
-`hostlyft-tax-2026-a1b2c3d4e5f6.json`. **Google never shows it again** — if you
-lose it, delete the key and make a new one.
-
-### Put it in the right place
-
-The project expects it at `tax/google_service_account.json`. In Terminal:
+### Put it where the tool expects
 
 ```
-mv ~/Downloads/hostlyft-tax-*.json ~/Documents/hostlyft-tax/tax/google_service_account.json
-chmod 600 ~/Documents/hostlyft-tax/tax/google_service_account.json
+mv ~/Downloads/client_secret_*.json ~/Documents/hostlyft-tax/tax/google_oauth_client.json
+chmod 600 ~/Documents/hostlyft-tax/tax/google_oauth_client.json
 ```
 
-`mv` moves and renames in one go. The `*` matches whatever Google called it.
-`chmod 600` locks it so only your account can read it.
+`mv` moves and renames in one go; the `*` matches whatever Google called it.
 
-**Check it:**
+> This file identifies the **application**, not you. On its own it grants
+> nothing. The next step is what actually gives access.
+
+---
+
+## Step 5 — Sign in
+
+```
+python scripts/google_login.py
+```
+
+A browser opens. Sign in as **team@hostlyft.com** and approve.
+
+You'll likely see **"Google hasn't verified this app"** — that's expected for
+an Internal app you created yourself minutes ago. Click **Advanced** → **Go to
+Hostlyft Tax Tracker (unsafe)**. It's your own app; the warning is aimed at
+apps written by strangers.
+
+When it's done the tab says so, and a token is saved to `tax/google_token.json`
+— locked to your account and blocked from GitHub.
+
+From then on it renews itself silently. No browser again, which is what lets the
+scheduled job in Stage 13 run unattended.
+
+---
+
+## Step 6 — Check it
 
 ```
 python scripts/check_google.py
 ```
 
-Step 1 should pass and print the robot's email address. Step 3 will fail — that's
-expected, you haven't shared anything yet.
-
-> ⚠️ That file is a **private key**. Anyone holding it can act as the robot.
-> It sits in `tax/`, which `.gitignore` blocks, and the checker confirms git
-> refuses to upload it.
-
----
-
-## Step 5 — Share your folder with the robot
-
-**This is the step everyone forgets**, and Google's error when you do is a bare
-"not found", as though the file didn't exist.
-
-1. Open **Google Drive**
-2. Find the folder containing `Hostlyft_Accounting_2026`
-3. Right-click the folder → **Share**
-4. Paste the robot's email address (from step 3 or the checker output)
-5. Set it to **Editor** — not Viewer; it needs to create the tax sheet
-6. **Untick "Notify people"** — it's a robot, the email would bounce
-7. **Share**
-
-Share the **folder**, not just the sheet. The new tax sheet gets created inside
-that folder, which needs folder-level permission.
-
----
-
-## Step 6 — Check everything
+All four should pass:
 
 ```
-python scripts/check_google.py
+1. THE APP REGISTRATION           Desktop OAuth client found
+2. ARE YOU SIGNED IN?             yes, spreadsheets only
+3. CAN IT OPEN YOUR SHEET?        Hostlyft_Accounting_2026, 17 tabs
+4. CAN IT READ THE NOTES?         yes, N cell notes found
 ```
 
-All five steps should pass:
-
-```
-1. THE KEY FILE                       found, locked, git-ignored
-2. DOES GOOGLE ACCEPT IT?             signed in to Drive
-3. CAN IT SEE YOUR ACCOUNTING SHEET?  yes, and can edit
-4. CAN IT CREATE THE TAX SHEET?       yes, folder is writable
-5. CAN IT READ THE NOTES?             yes, N tabs
-```
-
-Nothing is written to your sheet by this — it only reads.
+Nothing is written to your sheet — this only reads.
 
 ---
 
 ## If something goes wrong
 
-**"does not exist" (404)** — the folder or sheet hasn't been shared with the
-robot. Being able to see it yourself isn't enough. Redo step 5, and check you
-pasted the `.iam.gserviceaccount.com` address rather than your own.
+**"is a WEB application client"** — you picked the wrong application type in
+step 4. Create another, choosing **Desktop app**.
 
-**"refused access" (403)** — either an API isn't enabled (step 2), or you shared
-as Viewer instead of Editor.
+**"The Google Sheets API is not switched on"** — step 2 was missed, or was done
+in a different project. Check the project dropdown says `hostlyft-tax`.
 
-**"not a service-account key"** — Google hands out several kinds of credential
-file and they look alike. You need the one from **Service Accounts → Keys**, not
-an OAuth client file.
+**"Google hasn't verified this app"** — expected. Advanced → Go to … (unsafe).
 
-**"rejected the key" (401)** — the key was deleted in the console. Make a new
-one and repeat step 4.
+**"Google would not renew the sign-in"** — usually the consent screen is
+External and still in Testing, which expires tokens after 7 days. Set it to
+Internal, then `python scripts/google_login.py --force`.
 
-**You accidentally shared with the wrong address** — remove it in Drive's share
-dialog. Nothing was exposed unless that address belongs to someone real.
+**You want to disconnect it** — `python scripts/google_login.py --revoke`
+forgets the token on this Mac. To withdraw at Google's end too, visit
+myaccount.google.com/permissions.
 
 ---
 
 ## What happens next
 
-Once this passes, the tax sheet gets built: a **separate** spreadsheet beside
-your accounting sheet, run on **cash received**, holding the gross/net figures,
-processor fees, currency conversions and the tax summary.
+The tax sheet gets built: a **separate** spreadsheet run on **cash received**,
+holding gross and net figures, processor fees, currency conversions and the tax
+summary. It appears in My Drive; drag it next to your accounting sheet once.
 
 Your accounting sheet keeps its own convention — grouping a month by service
 period so end-of-month team payouts work — and is **never written to**.

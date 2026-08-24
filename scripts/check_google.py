@@ -1,12 +1,10 @@
 """
-check_google.py - is the Google setup working?
+check_google.py - is the Google connection working?
 
     python scripts/check_google.py
 
-Checks each step in order and stops at the first thing that is wrong,
-saying what to do about it. Run it after every step of GOOGLE-SETUP.md.
-
-Never prints the key.
+Checks each step in order, stops at the first problem, and says what to do.
+Only reads - it never writes to your sheet.
 """
 
 import sys
@@ -23,108 +21,86 @@ OK, BAD = f"{GREEN}  ok  {OFF}", f"{RED} fail {OFF}"
 
 def main():
     print()
-    print("Hostlyft Tax Tracker - Google setup check")
+    print("Hostlyft Tax Tracker - Google check")
     print("=" * 70)
 
-    # -- 1. the key file --
-    print(f"\n{BOLD}1. THE KEY FILE{OFF}")
+    # -- 1. the OAuth client file --
+    print(f"\n{BOLD}1. THE APP REGISTRATION{OFF}")
     print("-" * 70)
     try:
-        data = gsheets.read_key_file()
+        gsheets.read_client_file()
     except gsheets.GoogleError as error:
         print(f"[{BAD}] {error}")
         return 1
+    print(f"[{OK}] Desktop OAuth client found at {gsheets.client_path()}")
 
-    path = gsheets.key_path()
-    print(f"[{OK}] found at {path}")
-    print(f"[{OK}] it is a service-account key")
-    print(f"       project   {data['project_id']}")
-    print(f"       robot     {data['client_email']}")
-
-    permissions = oct(path.stat().st_mode & 0o777)[2:]
-    if permissions == "600":
-        print(f"[{OK}] locked to your account (600)")
-    else:
-        path.chmod(0o600)
-        print(f"[{OK}] was {permissions}, changed to 600")
-
-    import subprocess
-    ignored = subprocess.run(["git", "check-ignore", "-q", str(path)],
-                             cwd=config.ROOT, capture_output=True).returncode == 0
-    print(f"[{OK if ignored else BAD}] git "
-          f"{'refuses to upload it' if ignored else 'WOULD UPLOAD IT - stop'}")
-
-    # -- 2. does Google accept it --
-    print(f"\n{BOLD}2. DOES GOOGLE ACCEPT IT?{OFF}")
+    # -- 2. signed in? --
+    print(f"\n{BOLD}2. ARE YOU SIGNED IN?{OFF}")
     print("-" * 70)
     try:
-        drive = gsheets.service("drive", "v3")
-        print(f"[{OK}] signed in to Drive")
-    except Exception as error:
-        print(f"[{BAD}] {gsheets.describe_error(error, 'Drive')}")
+        creds = gsheets.credentials()
+    except gsheets.GoogleError as error:
+        print(f"[{BAD}] {error}")
         return 1
+    print(f"[{OK}] signed in, token saved at {gsheets.token_path()}")
+    print(f"       scopes: {', '.join(s.rsplit('/', 1)[-1] for s in creds.scopes or [])}")
+    print(f"       (spreadsheets only - not Drive, not documents)")
 
-    # -- 3. can it see the sheet --
-    print(f"\n{BOLD}3. CAN IT SEE YOUR ACCOUNTING SHEET?{OFF}")
+    import subprocess
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", str(gsheets.token_path())],
+        cwd=config.ROOT, capture_output=True).returncode == 0
+    print(f"[{OK if ignored else BAD}] git "
+          f"{'refuses to upload the token' if ignored else 'WOULD UPLOAD IT - stop'}")
+
+    # -- 3. can it open the accounting sheet --
+    print(f"\n{BOLD}3. CAN IT OPEN YOUR ACCOUNTING SHEET?{OFF}")
     print("-" * 70)
     sheet_id = config.get_secret("GOOGLE_SHEET_ID")
     if not sheet_id:
         print(f"[{BAD}] GOOGLE_SHEET_ID is not set in tax/.env")
         return 1
     try:
-        info = drive.files().get(
-            fileId=sheet_id,
-            fields="id,name,parents,capabilities(canEdit)").execute()
-        print(f"[{OK}] can see \"{info['name']}\"")
-        print(f"       can edit it: {info.get('capabilities', {}).get('canEdit')}")
-        folder = (info.get("parents") or [None])[0]
+        sheets = gsheets.service()
+        info = sheets.spreadsheets().get(
+            spreadsheetId=sheet_id,
+            fields="properties(title),sheets(properties(title))").execute()
     except Exception as error:
         print(f"[{BAD}] {gsheets.describe_error(error, 'your accounting sheet')}")
-        print(f"\n       Share it with:  {data['client_email']}")
         return 1
 
-    # -- 4. can it write in the folder --
-    print(f"\n{BOLD}4. CAN IT CREATE THE TAX SHEET ALONGSIDE?{OFF}")
-    print("-" * 70)
-    if not folder:
-        print(f"[{YELLOW} note {OFF}] the sheet is not in a folder - the tax "
-              f"sheet will go to the robot's own Drive instead")
-    else:
-        try:
-            meta = drive.files().get(
-                fileId=folder,
-                fields="id,name,capabilities(canAddChildren)").execute()
-            can_add = meta.get("capabilities", {}).get("canAddChildren")
-            print(f"[{OK if can_add else BAD}] folder \"{meta['name']}\" - "
-                  f"{'can create files in it' if can_add else 'CANNOT create files'}")
-            if not can_add:
-                print(f"       Share the FOLDER with {data['client_email']} "
-                      f"as Editor.")
-                return 1
-        except Exception as error:
-            print(f"[{BAD}] {gsheets.describe_error(error, 'the folder')}")
-            print(f"\n       Share the folder with: {data['client_email']}")
-            return 1
+    titles = [s["properties"]["title"] for s in info.get("sheets", [])]
+    print(f"[{OK}] opened \"{info['properties']['title']}\"")
+    print(f"       {len(titles)} tabs: {', '.join(titles[:6])}"
+          f"{' ...' if len(titles) > 6 else ''}")
 
-    # -- 5. can it read cell notes --
-    print(f"\n{BOLD}5. CAN IT READ THE NOTES IN YOUR TABS?{OFF}")
+    # -- 4. can it read cell notes --
+    print(f"\n{BOLD}4. CAN IT READ THE NOTES IN YOUR TABS?{OFF}")
     print("-" * 70)
+    target = next((t for t in titles if t.lower().startswith("jul")), titles[0])
     try:
-        sheets = gsheets.service("sheets", "v4")
-        result = sheets.spreadsheets().get(
-            spreadsheetId=sheet_id, includeGridData=False,
-            fields="sheets(properties(title))").execute()
-        titles = [s["properties"]["title"] for s in result.get("sheets", [])]
-        print(f"[{OK}] Sheets API works - {len(titles)} tabs")
-        print(f"       {', '.join(titles[:8])}{' ...' if len(titles) > 8 else ''}")
+        data = sheets.spreadsheets().get(
+            spreadsheetId=sheet_id, ranges=[target], includeGridData=True,
+            fields="sheets(data(rowData(values(note))))").execute()
     except Exception as error:
-        print(f"[{BAD}] {gsheets.describe_error(error, 'the Sheets API')}")
+        print(f"[{BAD}] {gsheets.describe_error(error, 'cell notes')}")
         return 1
+
+    notes = 0
+    for sheet in data.get("sheets", []):
+        for block in sheet.get("data", []):
+            for row in block.get("rowData", []):
+                for cell in row.get("values", []):
+                    if cell.get("note"):
+                        notes += 1
+    print(f"[{OK}] read the \"{target}\" tab - {notes} cell notes found")
+    if notes == 0:
+        print(f"       (none on that tab; they may be on another)")
 
     print()
     print("=" * 70)
-    print(f"{GREEN}{BOLD}Google setup is working.{OFF}")
-    print("Nothing has been written to your sheet - this only reads.")
+    print(f"{GREEN}{BOLD}Google is connected.{OFF}")
+    print("Nothing was written - this only reads.")
     print()
     return 0
 

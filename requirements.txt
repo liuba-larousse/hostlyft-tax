@@ -44,6 +44,11 @@ cryptography>=42.0,<46.0
 google-auth>=2.28,<3.0
 google-api-python-client>=2.120,<3.0
 
+# Runs the one-time browser sign-in for Google. Needed because Hostlyft's
+# Google Workspace blocks service-account keys by policy (Secure by
+# Default), so the tool signs in as Liuba instead of as a robot.
+google-auth-oauthlib>=1.2,<2.0
+
 # --- Testing (every stage) ---
 # Runs the automatic checks that prove the numbers are right, e.g. that a
 # $2,000 invoice is counted once and not twice.
