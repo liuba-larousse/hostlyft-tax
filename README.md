@@ -366,20 +366,116 @@ problems.
 
 ---
 
+## Two businesses, one tax return
+
+Every income and expense row carries a `business` tag:
+
+| Tag | What it is |
+|---|---|
+| `hostlyft` | work done through Hostlyft LLC |
+| `marcus` | separate work, paid into the personal Wise account |
+
+They **report separately**, so the Hostlyft profit-and-loss used for team splits
+stays honest. They are **taxed together**, because a single-member LLC is a
+disregarded entity — both land on the same 1040. Self-employment tax is worked
+out on the combined figure, and the FEIE and Social Security caps are combined
+limits too.
+
+Leaving Marcus out would understate self-employment tax by roughly **$6,900**.
+
+An unknown tag is rejected rather than accepted. A typo like `marcuss` would
+otherwise create a silent third business that no report ever shows, and the money
+would simply vanish from every total without an error.
+
+---
+
+## A jar is not a payment
+
+A Wise jar is a labelled pot **inside your own account**. Moving money into one
+pays nobody — it is still your money. So:
+
+- allocating to a jar is **not** a deductible expense
+- only an actual **withdrawal** is deductible
+- only **withdrawals** count toward the $600 threshold
+- jar balances still count toward the FBAR $10,000 test
+
+Three numbers per person, never conflated:
+
+| Number | Where it comes from | What it's for |
+|---|---|---|
+| Earned | the Sheet's split calculation | team management |
+| In jar | Wise SAVINGS balance | cash held on their behalf |
+| **Withdrawn** | actual transfers out | **the tax deduction** |
+
+This is enforced structurally, not by remembering: jar balances live in the
+`wise_jars` table and the `expenses` table has no way to hold one. An owner's
+draw is recorded as excluded with a reason — visible, but not reducing profit.
+
+**The December consequence.** Money still in jars on 31 December isn't deductible
+that year but still inflates taxable profit. At 15.3%, **$8,000 left in jars
+costs about $1,224** in real tax. Stage 10 warns from 1 December.
+
+---
+
+## The team
+
+| Name | Also known as | Status | Form | 1099-NEC? |
+|---|---|---|---|---|
+| Katerina Mrvova | — | **US citizen** | **W-9** | **yes, at $600** |
+| Yetunde Olaniyan | Ayoka | not a US person | W-8BEN | no |
+| Evgeniya Dyatlovskaya | Jane | not a US person | W-8BEN | no |
+| Sunniva Texe | — | not a US person | W-8BEN | no |
+
+Wise transfers may be labelled with a full name **or** a nickname, so both are
+matched — "Ayoka" and "Yetunde Olaniyan" are one person, and missing one form
+would split the total and hide a $600 crossing.
+
+Matching is on **whole words only**. Without that, "Jane" would match "Janet" and
+quietly attribute a stranger's payment to a contractor.
+
+Katerina's US-person status is written as a fixed fact rather than a setting, and
+a test pins it. US citizenship decides it; dual nationality and living abroad
+don't change it, and a US citizen cannot sign a W-8BEN because that form
+certifies foreign status. A missing W-9 TIN triggers 24% backup withholding.
+
+---
+
+## Upgrading the database
+
+`CREATE TABLE IF NOT EXISTS` adds missing tables, but it will **not** add a
+column to a table that already exists. So when a later stage needs a new column,
+the database holding your real records is altered in place.
+
+Rebuilding instead would throw away every transaction, every categorisation
+decision, and the record of which alerts have already fired. That's never the
+right trade.
+
+```
+python scripts/init_db.py     # creates, or upgrades in place. Safe to re-run.
+```
+
+Each migration step is written so running it twice is harmless. Back up first —
+`tax/backups/` holds a snapshot taken before each upgrade.
+
+---
+
 ## Build progress
 
 | Stage | What it adds | Status |
 |---|---|---|
 | 1 | Skeleton — setup script, settings, secrets template | ✅ done |
-| 2 | Database — income, expenses, payouts, FX cache, alerts | ✅ done |
+| 2 | Database — income, expenses, payouts, jars, ledger, FX cache, alerts | ✅ done |
 | 3 | Secrets walkthrough | ✅ done |
 | 4 | Stripe income (gross, with fees as expenses) | ✅ done |
 | 5 | Currency conversion to USD | ✅ done |
-| 6 | Wise + double-count prevention | not started |
+| 6 | Wise — both profiles, jars, double-count prevention | in progress |
 | 7 | Capital One one-time CSV import | not started |
 | 8 | Categorization | not started |
-| 9 | Tax calculator | not started |
-| 10 | Reminders, $600 contractor alarm, FBAR | not started |
+| 9 | Tax calculator (both businesses combined) | not started |
+| 10 | Reminders — quarterly, FBAR, jars, contractor alarm | not started |
+| 11 | Google Sheet reconciliation tabs | not started |
+| 12 | Contractor forms tracker (W-9 / W-8BEN) | not started |
+| 13 | Scheduling + migration to the main Mac | not started |
 
 Currency conversion (Stage 5) deliberately comes before Wise (Stage 6): Wise
 holds several currencies at once, so the converter has to exist first.

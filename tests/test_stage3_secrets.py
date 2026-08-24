@@ -192,3 +192,111 @@ def test_every_checked_secret_is_documented_in_the_template(name, _stage, _check
     """If the checker knows about a secret, .env.example must explain it."""
     from taxlib import config
     assert f"{name}=" in config.ENV_EXAMPLE_PATH.read_text()
+
+
+# ---------------------------------------------------------------------------
+#  Google settings (added when the plan grew a Sheets stage)
+# ---------------------------------------------------------------------------
+
+def test_a_sheet_id_is_accepted():
+    status, message = check_secrets.check_google_sheet_id(
+        "1KtqNg_hJFkceP7JRzFg_ru_7Q9jwmrrLbUz6UVUHJhg")
+    assert status == OK
+    assert "44" in message
+
+
+def test_pasting_the_whole_sheet_address_is_caught():
+    """The commonest mistake: copying the address bar instead of the ID."""
+    status, message = check_secrets.check_google_sheet_id(
+        "https://docs.google.com/spreadsheets/d/1KtqNg_hJ/edit#gid=0")
+    assert status == BAD
+    assert "/d/" in message
+
+
+def test_a_service_account_file_that_is_not_there_yet_is_not_an_error(tmp_path):
+    """Blank until Stage 11 is reached. That is expected, not a failure."""
+    status, message = check_secrets.check_service_account_json(
+        str(tmp_path / "nope.json"))
+    assert status == check_secrets.BLANK
+    assert "Stage 11" in message
+
+
+def test_the_wrong_kind_of_google_key_file_is_caught(tmp_path):
+    """
+    Google hands out several kinds of credential file. An OAuth client file
+    looks similar and simply will not work here.
+    """
+    wrong = tmp_path / "creds.json"
+    wrong.write_text('{"type": "authorized_user", "client_id": "x"}')
+
+    status, message = check_secrets.check_service_account_json(str(wrong))
+    assert status == BAD
+    assert "not a service account" in message
+
+
+def test_a_real_looking_service_account_file_passes(tmp_path):
+    service_account = tmp_path / "sa.json"
+    service_account.write_text(
+        '{"type": "service_account",'
+        ' "client_email": "hostlyft-tax@example.iam.gserviceaccount.com"}')
+    service_account.chmod(0o600)
+
+    status, message = check_secrets.check_service_account_json(
+        str(service_account))
+    assert status == OK
+    # the address is shortened, like every other value here
+    assert "gserviceaccount" not in message
+
+
+# ---------------------------------------------------------------------------
+#  Settings added by later stages
+# ---------------------------------------------------------------------------
+
+def test_a_setting_missing_from_the_file_entirely_is_reported(tmp_path,
+                                                              monkeypatch):
+    """
+    tax/.env is copied from the template once. Later stages add new settings
+    to the template, so a working file ends up missing lines entirely -
+    which reads as "blank" when actually there is nothing there to fill in.
+    """
+    from taxlib import config
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("STRIPE_SECRET_KEY=sk_live_x\n")
+    monkeypatch.setattr(config, "ENV_PATH", env_file)
+
+    missing = check_secrets.check_for_missing_settings(fix=False)
+
+    assert "GOOGLE_SHEET_ID" in missing
+    assert "STRIPE_SECRET_KEY" not in missing
+
+
+def test_adding_missing_settings_never_touches_existing_lines(tmp_path,
+                                                              monkeypatch):
+    from taxlib import config
+
+    env_file = tmp_path / ".env"
+    original = ("STRIPE_SECRET_KEY=sk_live_mine\n"
+                "GMAIL_ADDRESS=help.hostlyft@gmail.com\n")
+    env_file.write_text(original)
+    monkeypatch.setattr(config, "ENV_PATH", env_file)
+
+    check_secrets.check_for_missing_settings(fix=True)
+
+    after = env_file.read_text()
+    assert original in after, "an existing line was altered"
+    assert "GOOGLE_SHEET_ID=" in after
+
+    values = config.load_env()
+    assert values["STRIPE_SECRET_KEY"] == "sk_live_mine"
+
+
+def test_nothing_is_reported_missing_once_the_file_is_complete(tmp_path,
+                                                               monkeypatch):
+    from taxlib import config
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(config.ENV_EXAMPLE_PATH.read_text())
+    monkeypatch.setattr(config, "ENV_PATH", env_file)
+
+    assert check_secrets.check_for_missing_settings(fix=False) == []

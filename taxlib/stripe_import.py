@@ -118,6 +118,10 @@ def usd_amount(amount, currency):
 
 FEE_CATEGORY = "payment processing"
 
+# Everything Stripe reports is Hostlyft LLC work. The separate Marcus income
+# arrives in the personal Wise account and is tagged there, in Stage 6.
+BUSINESS = "hostlyft"
+
 
 def build_records(invoices, charges, balance_transactions, payouts,
                   since=None, until=None):
@@ -185,6 +189,7 @@ def build_records(invoices, charges, balance_transactions, payouts,
         income.append({
             "source": "stripe",
             "source_id": invoice.get("id"),
+            "business": BUSINESS,
             "date": paid_on,
             "amount": gross,
             "currency": currency,
@@ -216,6 +221,7 @@ def build_records(invoices, charges, balance_transactions, payouts,
         income.append({
             "source": "stripe",
             "source_id": charge.get("id"),
+            "business": BUSINESS,
             "date": when,
             "amount": gross,
             "currency": currency,
@@ -245,6 +251,7 @@ def build_records(invoices, charges, balance_transactions, payouts,
                 expenses.append({
                     "source": "stripe",
                     "source_id": f"{entry.get('id')}:fee",
+                    "business": BUSINESS,
                     "date": when,
                     "amount": fee,
                     "currency": currency,
@@ -262,6 +269,7 @@ def build_records(invoices, charges, balance_transactions, payouts,
                 expenses.append({
                     "source": "stripe",
                     "source_id": entry.get("id"),
+                    "business": BUSINESS,
                     "date": when,
                     "amount": cost,
                     "currency": currency,
@@ -282,6 +290,7 @@ def build_records(invoices, charges, balance_transactions, payouts,
                 income.append({
                     "source": "stripe",
                     "source_id": entry.get("id"),
+                    "business": BUSINESS,
                     "date": when,
                     "amount": amount,          # already negative
                     "currency": currency,

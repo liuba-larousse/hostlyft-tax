@@ -147,10 +147,83 @@ def test_tax_settings_match_the_established_situation():
     assert config.BASE_CURRENCY == "USD"
 
 
-def test_all_four_contractors_are_watched():
-    """The $600 W-9 / 1099-NEC alarm can only fire for people on this list."""
-    assert set(config.CONTRACTORS) == {"Ayoka", "Katerina", "Jane", "Sunniva"}
-    assert "Sunniva" in config.CONTRACTORS_ALWAYS_FLAG_IN_DECEMBER
+def test_all_four_contractors_are_on_the_roster():
+    """Alerts can only fire for people on this list."""
+    assert set(config.contractor_names()) == {
+        "Katerina Mrvova", "Yetunde Olaniyan",
+        "Evgeniya Dyatlovskaya", "Sunniva Texe",
+    }
+
+
+def test_only_katerina_gets_a_1099():
+    """
+    A 1099-NEC reports payments to a US person. Katerina is a US citizen, so
+    she gets a W-9 and a 1099 at $600. The other three are not US persons,
+    complete a W-8BEN instead, and get no 1099.
+    """
+    katerina = config.contractor("Katerina Mrvova")
+    assert katerina["us_person"] is True
+    assert katerina["form"] == "W-9"
+    assert katerina["issues_1099"] is True
+
+    for name in ["Yetunde Olaniyan", "Evgeniya Dyatlovskaya", "Sunniva Texe"]:
+        person = config.contractor(name)
+        assert person["us_person"] is False
+        assert person["form"] == "W-8BEN"
+        assert person["issues_1099"] is False
+
+
+def test_katerina_cannot_be_recorded_as_a_non_us_person():
+    """
+    Pinned deliberately.
+
+    US citizenship decides this. Dual nationality and living abroad do not
+    change it, and a US citizen cannot sign a W-8BEN because that form
+    certifies foreign status. This was raised, explained and accepted.
+
+    If anyone ever edits that flag, this test fails loudly rather than the
+    change passing quietly and a required 1099 never being issued. A missing
+    W-9 TIN also triggers 24% backup withholding.
+    """
+    katerina = config.contractor("Katerina Mrvova")
+    assert katerina["us_person"] is True, (
+        "Katerina is a US citizen and must not be recorded otherwise")
+    assert katerina["form"] != "W-8BEN"
+
+
+def test_sunniva_is_flagged_every_december_regardless_of_amount():
+    """Asked for explicitly, so it is a decision rather than an oversight."""
+    assert config.contractor("Sunniva Texe").get("always_flag_in_december")
+
+
+def test_nicknames_and_full_names_both_match():
+    """
+    A Wise transfer may be labelled either way - "Ayoka" and "Yetunde
+    Olaniyan" are one person. Missing one form would split their total and
+    hide a $600 crossing.
+    """
+    for text, expected in [
+        ("Transfer to Ayoka", "Yetunde Olaniyan"),
+        ("Payment to Yetunde Olaniyan", "Yetunde Olaniyan"),
+        ("wise transfer Jane", "Evgeniya Dyatlovskaya"),
+        ("Evgeniya Dyatlovskaya September", "Evgeniya Dyatlovskaya"),
+        ("KATERINA payout", "Katerina Mrvova"),
+        ("Sunniva Texe hours", "Sunniva Texe"),
+    ]:
+        assert config.match_contractor(text)["name"] == expected, text
+
+
+def test_a_name_inside_another_word_is_not_a_match():
+    """
+    Matching is on whole words. Without that, "Jane" would match "Janet" and
+    quietly attribute a stranger's payment to a contractor.
+    """
+    for text in ["Janet Smith invoice", "Sunnivale Ltd", "Katerinaburg Hotel"]:
+        assert config.match_contractor(text) is None, text
+
+
+def test_the_two_businesses_are_named_consistently():
+    assert config.BUSINESSES == ("hostlyft", "marcus")
 
 
 # ---------------------------------------------------------------------------

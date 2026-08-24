@@ -16,6 +16,36 @@ THE FIVE TABLES
                     $2,000 being counted twice (see the note below)
     fx_rates        a saved copy of every exchange rate used
     alerts_sent     a record of reminders already sent, so they fire once
+    wise_jars       per-person Wise jar balances over time
+    contractor_ledger  earned / in jar / withdrawn, per person
+
+TWO BUSINESSES, ONE TAX RETURN
+    Every income and expense row carries a `business` tag:
+
+        hostlyft   work done through Hostlyft LLC
+        marcus     separate work, paid into the personal Wise account
+
+    They report separately - so the Hostlyft profit-and-loss used for team
+    splits stays honest - but the tax calculator adds both together, because
+    a single-member LLC is a "disregarded entity": both land on the same
+    1040. Self-employment tax is worked out on the combined figure, and the
+    FEIE and Social Security caps are combined limits too.
+
+    Leaving Marcus out would understate self-employment tax by roughly
+    $6,900.
+
+A JAR IS NOT A PAYMENT
+    A Wise jar is a labelled pot inside her own account. Moving money into
+    one is not paying anybody - it is still her money. So:
+
+      - allocating to a jar is NOT a deductible expense
+      - only an actual WITHDRAWAL is deductible
+      - only WITHDRAWALS count toward the $600 contractor threshold
+      - jar balances still count toward the FBAR $10,000 test
+
+    Jar balances therefore live in `wise_jars`, never in `expenses`. The
+    expenses table physically cannot hold a jar allocation, which is a
+    stronger guarantee than remembering not to put one there.
 
     (Plus a small `meta` table holding the schema version, so later stages can
     upgrade the database safely instead of asking you to start over.)
@@ -56,7 +86,11 @@ from taxlib import config
 
 # The version of the table layout. If a later stage needs a new column, it
 # bumps this number and adds the column, rather than you rebuilding by hand.
-SCHEMA_VERSION = 1
+#
+#   1  income, expenses, stripe_payouts, fx_rates, alerts_sent
+#   2  + business column on income and expenses (hostlyft | marcus)
+#      + wise_jars, contractor_ledger
+SCHEMA_VERSION = 2
 
 
 # ===========================================================================
@@ -82,6 +116,30 @@ def round_money(value):
 def _now():
     """The current time in UTC, as text. Used for created/updated stamps."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+BUSINESS_HOSTLYFT = config.BUSINESS_HOSTLYFT
+BUSINESS_MARCUS = config.BUSINESS_MARCUS
+
+# The category marking a payment actually transferred OUT to a team member.
+# Only rows with this category count toward the $600 threshold.
+CATEGORY_CONTRACTOR = "contractor"
+
+
+def _checked_business(business):
+    """
+    Refuse an unknown business tag.
+
+    Only 'hostlyft' and 'marcus' exist. A typo like 'Marcus' or 'marcuss'
+    would silently create a third business that no report ever shows, and
+    the money would vanish from every total without an error.
+    """
+    tag = (business or "").strip().lower()
+    if tag not in config.BUSINESSES:
+        raise ValueError(
+            f"'{business}' is not a known business. "
+            f"Use one of: {', '.join(config.BUSINESSES)}")
+    return tag
 
 
 def _year_of(date_text):
@@ -138,6 +196,9 @@ CREATE TABLE IF NOT EXISTS income (
     source            TEXT    NOT NULL,      -- 'stripe' | 'wise' | 'manual'
     source_id         TEXT    NOT NULL,
 
+    -- which business this belongs to. Reported separately, taxed together.
+    business          TEXT    NOT NULL DEFAULT 'hostlyft',
+
     date              TEXT    NOT NULL,      -- YYYY-MM-DD
     tax_year          INTEGER,               -- filled in automatically
 
@@ -169,6 +230,7 @@ CREATE TABLE IF NOT EXISTS income (
 );
 
 CREATE INDEX IF NOT EXISTS idx_income_year ON income (tax_year);
+CREATE INDEX IF NOT EXISTS idx_income_business ON income (business);
 CREATE INDEX IF NOT EXISTS idx_income_date ON income (date);
 
 
@@ -178,6 +240,8 @@ CREATE TABLE IF NOT EXISTS expenses (
 
     source            TEXT    NOT NULL,   -- 'stripe' | 'wise' | 'capitalone' | 'manual'
     source_id         TEXT    NOT NULL,
+
+    business          TEXT    NOT NULL DEFAULT 'hostlyft',
 
     date              TEXT    NOT NULL,
     tax_year          INTEGER,
@@ -209,6 +273,7 @@ CREATE TABLE IF NOT EXISTS expenses (
 );
 
 CREATE INDEX IF NOT EXISTS idx_expenses_year   ON expenses (tax_year);
+CREATE INDEX IF NOT EXISTS idx_expenses_business ON expenses (business);
 CREATE INDEX IF NOT EXISTS idx_expenses_vendor ON expenses (vendor);
 
 
@@ -276,6 +341,75 @@ CREATE TABLE IF NOT EXISTS alerts_sent (
     sent_at           TEXT    NOT NULL
 );
 
+-- -------------------------------------------------------------- wise_jars
+-- A Wise "jar" is a labelled savings pot inside her own account, used to set
+-- money aside for each team member.
+--
+-- MONEY IN A JAR IS STILL HER MONEY. Putting it there pays nobody. So a jar
+-- balance is recorded here as an observation - what was in the pot on a given
+-- day - and never as an expense. Only the withdrawal out of the jar is a
+-- payment, and that goes in `expenses`.
+--
+-- One row per jar per observation date, so the balance can be tracked over
+-- time and re-reading the same day updates rather than duplicates.
+CREATE TABLE IF NOT EXISTS wise_jars (
+    id                INTEGER PRIMARY KEY,
+
+    balance_id        TEXT    NOT NULL,      -- Wise's id for the jar
+    jar_name          TEXT    NOT NULL,      -- what she called it in Wise
+    person            TEXT,                  -- who it is for, once matched
+
+    observed_on       TEXT    NOT NULL,      -- YYYY-MM-DD this was read
+    amount            REAL    NOT NULL,      -- balance in its own currency
+    currency          TEXT    NOT NULL,
+    amount_usd        REAL,
+    fx_rate           REAL,
+    fx_date           TEXT,
+
+    created_at        TEXT    NOT NULL,
+    updated_at        TEXT    NOT NULL,
+
+    UNIQUE (balance_id, observed_on)
+);
+
+CREATE INDEX IF NOT EXISTS idx_jars_person ON wise_jars (person);
+
+
+-- ------------------------------------------------------- contractor_ledger
+-- The three numbers per person that must never be confused with each other:
+--
+--   earned_usd     what the Google Sheet's split calculation says they earned
+--   in_jar_usd     what is sitting in their Wise jar right now
+--   withdrawn_usd  what has actually been transferred out to them
+--
+-- ONLY `withdrawn_usd` IS THE TAX DEDUCTION, and only it counts toward the
+-- $600 threshold that triggers a W-9 and a 1099-NEC.
+--
+-- They are stored side by side precisely so the gap between them is visible.
+-- Someone who earned $5,000 and withdrew $3,200 has $1,800 still owed to
+-- them, and that gap is a fact she should see rather than a rounding error.
+CREATE TABLE IF NOT EXISTS contractor_ledger (
+    id                INTEGER PRIMARY KEY,
+
+    person            TEXT    NOT NULL,      -- the canonical full name
+    tax_year          INTEGER NOT NULL,
+    as_of             TEXT    NOT NULL,      -- YYYY-MM-DD this was worked out
+
+    earned_usd        REAL    NOT NULL DEFAULT 0,
+    in_jar_usd        REAL    NOT NULL DEFAULT 0,
+    withdrawn_usd     REAL    NOT NULL DEFAULT 0,
+
+    -- withdrawn minus earned. Negative means money is still owed.
+    gap_usd           REAL    NOT NULL DEFAULT 0,
+
+    notes             TEXT,
+
+    created_at        TEXT    NOT NULL,
+    updated_at        TEXT    NOT NULL,
+
+    UNIQUE (person, tax_year, as_of)
+);
+
 
 -- ------------------------------------------------------------------- meta
 -- Internal bookkeeping: which version of the layout above this file uses.
@@ -286,15 +420,120 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
-def init_db(path=None):
+# ===========================================================================
+#  UPGRADING AN EXISTING DATABASE
+# ===========================================================================
+#
+# "CREATE TABLE IF NOT EXISTS" adds tables that are missing, but it will not
+# add a COLUMN to a table that already exists. So when a later stage needs a
+# new column, the database already holding real financial records has to be
+# altered in place.
+#
+# The alternative - deleting and rebuilding - would throw away every
+# transaction, every categorisation decision and the record of which alerts
+# have already fired. That is never the right trade.
+#
+# Each step below is written so running it twice is harmless.
+
+def _columns(connection, table):
+    return {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+
+
+def _add_column_if_missing(connection, table, column, definition):
+    """ALTER TABLE, but only if the column isn't already there."""
+    if column in _columns(connection, table):
+        return False
+    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    return True
+
+
+def _migrate_1_to_2(connection):
     """
-    Create the database and its tables if they aren't there yet.
+    Version 1 -> 2.
+
+    Adds the `business` column to income and expenses so the two income
+    streams - Hostlyft LLC and the separate Marcus work - report separately
+    while still being taxed together.
+
+    Everything already in the database predates the Marcus work being
+    tracked, and is Hostlyft. The column defaults to 'hostlyft', so existing
+    rows are correct without being touched.
+
+    wise_jars and contractor_ledger are new tables, so the CREATE TABLE
+    statements above have already made them.
+    """
+    changes = []
+    for table in ("income", "expenses"):
+        if _add_column_if_missing(connection, table, "business",
+                                  "TEXT NOT NULL DEFAULT 'hostlyft'"):
+            changes.append(f"added `business` to {table}, existing rows set "
+                           f"to 'hostlyft'")
+
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_income_business ON income (business)")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_expenses_business ON expenses (business)")
+    return changes
+
+
+# version to reach -> the function that gets there
+MIGRATIONS = {
+    2: _migrate_1_to_2,
+}
+
+
+def migrate(connection, verbose=False):
+    """
+    Bring an older database up to the current layout, in place.
+
+    Returns the list of changes made - empty if it was already current.
+    """
+    current = schema_version(connection)
+    if current is None:          # brand new; SCHEMA already built it correctly
+        return []
+
+    changes = []
+    for version in sorted(MIGRATIONS):
+        if current < version:
+            step_changes = MIGRATIONS[version](connection)
+            for change in step_changes:
+                changes.append(f"v{version}: {change}")
+                if verbose:
+                    print(f"  {change}")
+            current = version
+
+    return changes
+
+
+def init_db(path=None, verbose=False):
+    """
+    Create the database if it isn't there, or bring an older one up to date.
 
     Safe to call any number of times - it never deletes or overwrites data.
     Returns the open connection.
     """
     connection = connect(path)
+
+    # What version is this file on? Read it BEFORE creating anything, since
+    # creating the meta table would otherwise hide the answer.
+    existing_version = None
+    has_meta = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
+    ).fetchone()
+    if has_meta:
+        existing_version = schema_version(connection)
+
+    # ORDER MATTERS. Migrations run FIRST, on the tables as they currently
+    # are. The create-script below includes an index on income(business), and
+    # that index cannot be built until the migration has added the column -
+    # so running the create-script first fails with "no such column".
+    if existing_version is not None and existing_version < SCHEMA_VERSION:
+        migrate(connection, verbose=verbose)
+
+    # Then add anything still missing: new tables, new indexes. Harmless if
+    # they all already exist.
     connection.executescript(SCHEMA)
+
     connection.execute(
         "INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -390,6 +629,7 @@ def _upsert(connection, table, keys, values, protect_conversion=False):
 
 
 def upsert_income(connection, *, source, source_id, date, amount, currency,
+                  business=BUSINESS_HOSTLYFT,
                   amount_usd=None, fx_rate=None, fx_date=None,
                   description=None, payer=None,
                   excluded=False, exclusion_reason=None,
@@ -408,6 +648,7 @@ def upsert_income(connection, *, source, source_id, date, amount, currency,
         "income",
         {"source": source, "source_id": str(source_id)},
         {
+            "business": _checked_business(business),
             "date": date,
             "tax_year": _year_of(date),
             "amount": round_money(amount),
@@ -427,16 +668,27 @@ def upsert_income(connection, *, source, source_id, date, amount, currency,
 
 
 def upsert_expense(connection, *, source, source_id, date, amount, currency,
+                   business=BUSINESS_HOSTLYFT,
                    amount_usd=None, fx_rate=None, fx_date=None,
                    category="uncategorized", vendor=None, description=None,
                    excluded=False, exclusion_reason=None,
                    needs_review=False, review_note=None):
-    """Record one expense. Same re-run behaviour as income."""
+    """
+    Record one expense. Same re-run behaviour as income.
+
+    NEVER used for a Wise jar allocation. Moving money into a jar pays
+    nobody - it is still her money. Jar balances go in `wise_jars`; only the
+    withdrawal out of a jar is an expense.
+
+    An owner's draw is not an expense either. Record it with excluded=True
+    and a reason, so it stays visible without reducing taxable profit.
+    """
     return _upsert(
         connection,
         "expenses",
         {"source": source, "source_id": str(source_id)},
         {
+            "business": _checked_business(business),
             "date": date,
             "tax_year": _year_of(date),
             "amount": round_money(amount),
@@ -561,9 +813,13 @@ def record_alert(connection, *, alert_key, alert_type, subject=None,
 #  READING TOTALS
 # ===========================================================================
 
-def totals(connection, tax_year=None):
+def totals(connection, tax_year=None, business=None):
     """
     Add everything up for a year and return it as a dictionary.
+
+    `business` filters to one stream ('hostlyft' or 'marcus'). Left out, it
+    covers BOTH - which is what the tax calculation needs, because
+    self-employment tax is worked out on combined net earnings.
 
     Rows marked `excluded` are left out of the totals - that is exactly what
     the flag is for. They stay in the database so you can see the decision was
@@ -573,8 +829,15 @@ def totals(connection, tax_year=None):
     totals, and are reported separately as `unconverted_*` so an incomplete
     picture is never mistaken for a complete one.
     """
-    where_year = "AND tax_year = ?" if tax_year else ""
-    params = (tax_year,) if tax_year else ()
+    conditions, params = [], []
+    if tax_year:
+        conditions.append("AND tax_year = ?")
+        params.append(tax_year)
+    if business:
+        conditions.append("AND business = ?")
+        params.append(_checked_business(business))
+    where_year = " ".join(conditions)
+    params = tuple(params)
 
     def one(sql):
         return connection.execute(sql, params).fetchone()
@@ -610,6 +873,7 @@ def totals(connection, tax_year=None):
 
     return {
         "tax_year": tax_year,
+        "business": business,
         "income_count": income_row["n"],
         "income_usd": income_usd,
         "expense_count": expense_row["n"],
@@ -624,21 +888,172 @@ def totals(connection, tax_year=None):
     }
 
 
-def contractor_totals(connection, tax_year, names=None):
+def contractor_totals(connection, tax_year, people=None):
     """
-    Total paid to each contractor this year, in USD.
+    How much has actually been WITHDRAWN by each team member this year.
 
-    Used by Stage 10's daily check: crossing $600 means a W-9 and a 1099-NEC
-    are required. Only counts what is actually in this database.
+    THIS COUNTS WITHDRAWALS, NOT ALLOCATIONS.
+
+    Money moved into someone's Wise jar has not been paid to them - it is
+    still Liuba's money, sitting in her own account under a label. It is not
+    deductible and it does not count toward the $600 threshold that triggers
+    a W-9 and a 1099-NEC.
+
+    Two things enforce that here:
+
+      1. jar balances are physically stored in `wise_jars`, never in
+         `expenses`, so there is no row for this query to pick up by mistake
+      2. only rows categorised as an actual transfer out are counted
+
+    Matching uses full names AND nicknames, since a Wise transfer may be
+    labelled either way - "Ayoka" and "Yetunde Olaniyan" are one person.
+
+    Owner's draws are excluded rows, so they never appear here either.
     """
-    names = names or config.CONTRACTORS
+    people = people or config.CONTRACTORS
     result = {}
-    for name in names:
+
+    for person in people:
+        labels = config.all_names_for(person)
+
+        # vendor matches exactly; description matches loosely, because Wise
+        # writes things like "Transfer to Ayoka - September".
+        clauses = " OR ".join(
+            ["vendor = ? COLLATE NOCASE"] * len(labels)
+            + ["description LIKE ?"] * len(labels))
+        values = list(labels) + [f"%{label}%" for label in labels]
+
         row = connection.execute(
-            "SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n "
-            "FROM expenses WHERE excluded = 0 AND tax_year = ? "
-            "AND (vendor = ? COLLATE NOCASE OR description LIKE ?)",
-            (tax_year, name, f"%{name}%"),
+            f"SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n, "
+            f"       MAX(date) AS latest "
+            f"FROM expenses "
+            f"WHERE excluded = 0 AND category = ? AND tax_year = ? "
+            f"  AND ({clauses})",
+            [CATEGORY_CONTRACTOR, tax_year] + values,
         ).fetchone()
-        result[name] = {"usd": round_money(row["usd"]), "payments": row["n"]}
+
+        withdrawn = round_money(row["usd"])
+        result[person["name"]] = {
+            "person": person,
+            "withdrawn_usd": withdrawn,
+            "withdrawals": row["n"],
+            "latest_withdrawal": row["latest"],
+            # The $600 test. Withdrawals only.
+            "over_600": withdrawn >= 600,
+            "needs_1099": person["issues_1099"] and withdrawn >= 600,
+            "form": person["form"],
+        }
+
     return result
+
+
+# ===========================================================================
+#  WISE JARS  -  money set aside, but NOT yet paid to anyone
+# ===========================================================================
+
+def record_jar_balance(connection, *, balance_id, jar_name, observed_on,
+                       amount, currency, person=None, amount_usd=None,
+                       fx_rate=None, fx_date=None):
+    """
+    Record what was sitting in one jar on one day.
+
+    This is an OBSERVATION, not a transaction. Nothing here is an expense and
+    nothing here counts toward anybody's $600 threshold. Re-reading the same
+    jar on the same day updates the row rather than adding another.
+
+    Jar balances DO count toward the FBAR $10,000 test, because the money is
+    still hers, held in a foreign account.
+    """
+    return _upsert(
+        connection,
+        "wise_jars",
+        {"balance_id": str(balance_id), "observed_on": observed_on},
+        {
+            "jar_name": jar_name,
+            "person": person,
+            "amount": round_money(amount),
+            "currency": currency.upper(),
+            "amount_usd": round_money(amount_usd),
+            "fx_rate": fx_rate,
+            "fx_date": fx_date,
+        },
+        protect_conversion=True,
+    )
+
+
+def latest_jar_balances(connection, on_or_before=None):
+    """
+    The most recent reading for each jar, one row per jar.
+
+    A jar is read repeatedly over time, so this picks the newest observation
+    of each - optionally as it stood on a given date, which is how the
+    "still in jars on 31 December" check works.
+    """
+    params = []
+    date_filter = ""
+    if on_or_before:
+        date_filter = "WHERE observed_on <= ?"
+        params.append(on_or_before)
+
+    # Group by jar, keep only the newest observation of each.
+    return connection.execute(
+        f"""
+        SELECT * FROM wise_jars
+        WHERE id IN (
+            SELECT id FROM wise_jars
+            {date_filter}
+            GROUP BY balance_id
+            HAVING observed_on = MAX(observed_on)
+        )
+        ORDER BY person, jar_name
+        """,
+        params,
+    ).fetchall()
+
+
+def total_in_jars_usd(connection, on_or_before=None):
+    """
+    Everything sitting in jars, in US dollars.
+
+    Money still in jars on 31 December is not deductible that year, but it is
+    still her money - so it inflates taxable profit. At 15.3% self-employment
+    tax, $8,000 left in jars costs about $1,224 in real tax. That is what the
+    1 December reminder is for.
+    """
+    rows = latest_jar_balances(connection, on_or_before)
+    return round_money(sum(row["amount_usd"] or 0 for row in rows))
+
+
+# ===========================================================================
+#  CONTRACTOR LEDGER  -  the three numbers, side by side
+# ===========================================================================
+
+def record_contractor_ledger(connection, *, person, tax_year, as_of,
+                             earned_usd=0, in_jar_usd=0, withdrawn_usd=0,
+                             notes=None):
+    """
+    Store the three numbers for one person on one day.
+
+        earned      what the Google Sheet's split calculation says
+        in_jar      what is sitting in their jar
+        withdrawn   what has actually been transferred to them
+
+    Only `withdrawn` is the tax deduction. They are kept side by side so the
+    gap is visible: someone who earned $5,000 and withdrew $3,200 is still
+    owed $1,800, and that should be plain to see rather than buried.
+    """
+    earned = round_money(earned_usd) or 0
+    withdrawn = round_money(withdrawn_usd) or 0
+
+    return _upsert(
+        connection,
+        "contractor_ledger",
+        {"person": person, "tax_year": tax_year, "as_of": as_of},
+        {
+            "earned_usd": earned,
+            "in_jar_usd": round_money(in_jar_usd) or 0,
+            "withdrawn_usd": withdrawn,
+            "gap_usd": round_money(withdrawn - earned),
+            "notes": notes,
+        },
+    )

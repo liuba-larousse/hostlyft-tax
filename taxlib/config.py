@@ -108,13 +108,135 @@ SETTINGS = {
     "certificate_of_coverage": False,
 }
 
-# Contractors to watch for the $600 threshold that triggers a W-9 and a
-# 1099-NEC. Stage 10's daily check uses this list.
-CONTRACTORS = ["Ayoka", "Katerina", "Jane", "Sunniva"]
+# ===========================================================================
+#  THE TEAM
+# ===========================================================================
+#
+# Wise transfers may be labelled with a full name OR a nickname, so both are
+# matched. "Ayoka" and "Jane" are the names used day to day; the full names
+# are what appear on tax forms.
+#
+# WHY ONLY ONE PERSON GETS A 1099
+#     A 1099-NEC reports payments to a US person. Three of the four are not
+#     US persons, so they complete a W-8BEN - the form that certifies foreign
+#     status - and no 1099 is issued.
+#
+#     Katerina is a US citizen. A US citizen is a US person for tax purposes
+#     regardless of dual citizenship or where they live. No election changes
+#     that, and a US citizen cannot sign a W-8BEN, because it certifies
+#     exactly the thing that is not true of her.
+#
+#     This was raised, explained and accepted. It is deliberately written as
+#     a fixed fact rather than a setting, and a test pins it, so it cannot be
+#     changed by accident.
+#
+# WHAT COUNTS TOWARD $600
+#     WITHDRAWALS ONLY. Money sitting in a Wise jar is still Liuba's money -
+#     allocating it pays nobody. See taxlib/db.py.
 
-# Sunniva gets a year-end flag in December even when under $600, so it is a
-# conscious decision rather than something forgotten.
-CONTRACTORS_ALWAYS_FLAG_IN_DECEMBER = ["Sunniva"]
+CONTRACTORS = [
+    {
+        "name": "Katerina Mrvova",
+        "aliases": ["Katerina", "Mrvova"],
+        "us_person": True,
+        "form": "W-9",
+        "issues_1099": True,
+        "note": ("US citizen, also Czech, living in Brazil. US citizenship "
+                 "decides this - dual nationality and residence abroad do "
+                 "not change it. A missing W-9 TIN triggers 24% backup "
+                 "withholding."),
+    },
+    {
+        "name": "Yetunde Olaniyan",
+        "aliases": ["Ayoka", "Yetunde", "Olaniyan"],
+        "us_person": False,
+        "form": "W-8BEN",
+        "issues_1099": False,
+        "note": "Known as Ayoka. Not a US person.",
+    },
+    {
+        "name": "Evgeniya Dyatlovskaya",
+        "aliases": ["Jane", "Evgeniya", "Dyatlovskaya"],
+        "us_person": False,
+        "form": "W-8BEN",
+        "issues_1099": False,
+        "note": "Known as Jane. Not a US person.",
+    },
+    {
+        "name": "Sunniva Texe",
+        "aliases": ["Sunniva", "Texe"],
+        "us_person": False,
+        "form": "W-8BEN",
+        "issues_1099": False,
+        # Flagged every December regardless of amount, so it is a conscious
+        # decision rather than something quietly forgotten.
+        "always_flag_in_december": True,
+        "note": "Hourly at $25.00/hr. Not a US person.",
+    },
+]
+
+
+def contractor_names():
+    """The canonical full names, in roster order."""
+    return [person["name"] for person in CONTRACTORS]
+
+
+def contractor(name):
+    """Look one person up by their full name."""
+    for person in CONTRACTORS:
+        if person["name"].lower() == (name or "").lower():
+            return person
+    return None
+
+
+def all_names_for(person):
+    """
+    Every label a transfer to this person might carry: their full name, and
+    each nickname or surname.
+    """
+    return [person["name"]] + list(person.get("aliases", []))
+
+
+def match_contractor(text):
+    """
+    Work out which contractor a transaction description refers to, if any.
+
+    Matching is on whole words only. Without that, a short alias would match
+    inside an unrelated word and quietly attribute somebody else's payment.
+
+    Returns the contractor dictionary, or None.
+    """
+    import re
+
+    if not text:
+        return None
+
+    for person in CONTRACTORS:
+        for label in all_names_for(person):
+            if re.search(rf"\b{re.escape(label)}\b", text, re.IGNORECASE):
+                return person
+    return None
+
+
+# ===========================================================================
+#  THE TWO BUSINESSES
+# ===========================================================================
+#
+# Hostlyft LLC and the Marcus work are separate businesses. They are reported
+# separately, so the Hostlyft profit-and-loss used for team splits stays
+# honest - but they are TAXED TOGETHER, because a single-member LLC is a
+# disregarded entity and both land on the same 1040.
+#
+# Leaving Marcus out would understate self-employment tax by roughly $6,900.
+
+BUSINESS_HOSTLYFT = "hostlyft"
+BUSINESS_MARCUS = "marcus"
+BUSINESSES = (BUSINESS_HOSTLYFT, BUSINESS_MARCUS)
+
+# What an incoming payment from Marcus looks like in the personal Wise
+# account. Only credits matching this are read; everything else in that
+# account is never read, stored or logged.
+MARCUS_MATCH = ["Marcus"]
 
 # The reporting currency. Everything is converted to this before it is added
 # up, because the IRS wants US dollars.
@@ -229,6 +351,8 @@ _SECRET_STAGES = [
     ("WISE_PROFILE_ID", "Stage 6  - Wise account"),
     ("GMAIL_ADDRESS", "Stage 10 - email reminders"),
     ("GMAIL_APP_PASSWORD", "Stage 10 - email reminders"),
+    ("GOOGLE_SHEET_ID", "Stage 11 - Google Sheet tabs"),
+    ("GOOGLE_SERVICE_ACCOUNT_JSON", "Stage 11 - Google Sheet tabs"),
 ]
 
 

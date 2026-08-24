@@ -18,8 +18,10 @@ IT NEVER PRINTS YOUR SECRETS.
 Only their shape, e.g. "starts with sk_live_, 107 characters". That is
 deliberate: this output is safe to show to anyone, including in a chat window.
 
-    python scripts/check_secrets.py --connect       also test the keys live
-    python scripts/check_secrets.py --fix-permissions   re-lock the file
+    python scripts/check_secrets.py --connect            also test keys live
+    python scripts/check_secrets.py --add-missing        add settings that
+                                                        later stages introduced
+    python scripts/check_secrets.py --fix-permissions    re-lock the file
 """
 
 import argparse
@@ -111,6 +113,42 @@ def check_app_password(value):
     return OK, "16 characters, correct shape"
 
 
+def check_google_sheet_id(value):
+    # A Drive file ID is a long code of letters, digits, dashes and
+    # underscores. People often paste the whole web address by mistake.
+    if value.startswith("http"):
+        return BAD, ("that is the whole web address. You need only the code "
+                     "between /d/ and /edit")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,}", value):
+        return WARN, f"{len(value)} characters - a sheet ID is normally ~44"
+    return OK, f"{len(value)}-character sheet ID"
+
+
+def check_service_account_json(value):
+    # This one is a PATH to a file, not a secret in itself.
+    path = Path(value)
+    if not path.is_absolute():
+        path = config.ROOT / path
+
+    if not path.exists():
+        return BLANK, (f"file not downloaded yet ({value}) - Stage 11 walks "
+                       f"through creating it")
+    try:
+        import json
+        data = json.loads(path.read_text())
+    except Exception:
+        return BAD, f"{value} exists but is not readable JSON"
+
+    if data.get("type") != "service_account":
+        return BAD, (f"{value} is not a service account key file "
+                     f"(type is '{data.get('type')}')")
+
+    email = data.get("client_email", "")
+    permissions = oct(path.stat().st_mode & 0o777)[2:]
+    note = "" if permissions == "600" else f"  (permissions {permissions}, want 600)"
+    return OK, f"service account {email[:14]}...{note}"
+
+
 SECRETS = [
     # name, stage that needs it, checker, required-by-now
     ("STRIPE_SECRET_KEY",  "Stage 4  Stripe income",    check_stripe_key),
@@ -118,6 +156,9 @@ SECRETS = [
     ("WISE_PROFILE_ID",    "Stage 6  Wise account",     check_wise_profile),
     ("GMAIL_ADDRESS",      "Stage 10 email reminders",  check_gmail_address),
     ("GMAIL_APP_PASSWORD", "Stage 10 email reminders",  check_app_password),
+    ("GOOGLE_SHEET_ID",    "Stage 11 Google Sheet",     check_google_sheet_id),
+    ("GOOGLE_SERVICE_ACCOUNT_JSON",
+                           "Stage 11 Google Sheet",     check_service_account_json),
 ]
 
 
@@ -205,6 +246,76 @@ def check_file_safety(fix=False):
 # ===========================================================================
 #  VALUE CHECKS
 # ===========================================================================
+
+def template_names():
+    """Every setting name the template documents, in the order it lists them."""
+    names = []
+    for line in config.ENV_EXAMPLE_PATH.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            names.append(line.split("=", 1)[0].strip())
+    return names
+
+
+def check_for_missing_settings(fix=False):
+    """
+    Find settings the template documents but tax/.env doesn't have.
+
+    This happens naturally: tax/.env was copied from the template months ago,
+    and later stages added new settings to the template. Without this check
+    the tool would simply report them blank, with no hint that the LINE isn't
+    there at all - so editing the file wouldn't show anything to fill in.
+    """
+    existing = set(config.load_env())
+    missing = [name for name in template_names() if name not in existing]
+
+    if not missing:
+        return []
+
+    print(f"{BOLD}SETTINGS ADDED SINCE YOUR FILE WAS CREATED{OFF}")
+    print("-" * 62)
+    for name in missing:
+        print(f"[{MARK[BLANK]}] {name} is not in tax/.env at all")
+
+    if not fix:
+        print()
+        print("        These were added to the template by a later stage.")
+        print("        Add them to your file with:")
+        print("           python scripts/check_secrets.py --add-missing")
+        print()
+        return missing
+
+    # Append the template's own lines for the missing settings, comments and
+    # all, so the explanation of where to find each value comes with it.
+    lines = config.ENV_EXAMPLE_PATH.read_text().splitlines()
+    block, keep = [], False
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            keep = stripped.split("=", 1)[0].strip() in missing
+            if keep:
+                # bring the comment block above it along too
+                start = index
+                while start > 0 and (lines[start - 1].startswith("#")
+                                     or not lines[start - 1].strip()):
+                    start -= 1
+                block.extend(lines[start:index + 1])
+        elif keep and not stripped:
+            keep = False
+
+    with config.ENV_PATH.open("a", encoding="utf-8") as handle:
+        handle.write("\n\n# " + "-" * 74 + "\n")
+        handle.write("# Added by check_secrets.py --add-missing\n")
+        handle.write("# " + "-" * 74 + "\n")
+        handle.write("\n".join(block) + "\n")
+
+    config.ENV_PATH.chmod(0o600)
+    print()
+    print(f"{GREEN}        Added {len(missing)} setting(s) to tax/.env.{OFF}")
+    print("        Nothing existing was changed.")
+    print()
+    return []
+
 
 def check_values():
     """Check the shape of each secret. Returns the list of ones that are set."""
@@ -322,6 +433,9 @@ def main():
                         help="also test the keys against the real services")
     parser.add_argument("--fix-permissions", action="store_true",
                         help="re-lock tax/ and tax/.env to your account only")
+    parser.add_argument("--add-missing", action="store_true",
+                        help="append settings the template has but your file "
+                             "lacks (nothing existing is changed)")
     args = parser.parse_args()
 
     print()
@@ -332,6 +446,7 @@ def main():
     print()
 
     safe = check_file_safety(fix=args.fix_permissions)
+    missing = check_for_missing_settings(fix=args.add_missing)
     filled, problems = check_values()
 
     if args.connect:
@@ -344,6 +459,10 @@ def main():
     if problems:
         print(f"{RED}{problems} value(s) look wrong.{OFF} "
               f"Each one says what to do.")
+        return 1
+    if missing:
+        print(f"{YELLOW}{len(missing)} setting(s) are missing from your file.{OFF}"
+              f"  Add them:  python scripts/check_secrets.py --add-missing")
         return 1
     if not filled:
         print("File is safe. Nothing filled in yet - that's expected.")

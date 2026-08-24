@@ -335,13 +335,14 @@ def test_alerts_for_different_people_and_years_are_separate(conn):
 #  Contractor totals
 # ---------------------------------------------------------------------------
 
-def test_contractor_totals_add_up_per_person(conn):
+def test_contractor_totals_count_withdrawals_per_person(conn):
+    """Full names and nicknames both count toward the same person's total."""
     db.upsert_expense(conn, source="wise", source_id="p1", date="2026-02-01",
                       amount=350, currency="USD", amount_usd=350,
                       vendor="Ayoka", category="contractor")
     db.upsert_expense(conn, source="wise", source_id="p2", date="2026-05-01",
                       amount=300, currency="USD", amount_usd=300,
-                      vendor="Ayoka", category="contractor")
+                      vendor="Yetunde Olaniyan", category="contractor")
     db.upsert_expense(conn, source="wise", source_id="p3", date="2026-05-01",
                       amount=100, currency="USD", amount_usd=100,
                       vendor="Jane", category="contractor")
@@ -349,7 +350,71 @@ def test_contractor_totals_add_up_per_person(conn):
 
     figures = db.contractor_totals(conn, 2026)
 
-    assert figures["Ayoka"]["usd"] == 650.00     # over the $600 threshold
-    assert figures["Ayoka"]["payments"] == 2
-    assert figures["Jane"]["usd"] == 100.00
-    assert figures["Katerina"]["usd"] == 0.00    # listed even with no payments
+    # 350 as "Ayoka" plus 300 as "Yetunde Olaniyan" is one person, over $600
+    assert figures["Yetunde Olaniyan"]["withdrawn_usd"] == 650.00
+    assert figures["Yetunde Olaniyan"]["withdrawals"] == 2
+    assert figures["Yetunde Olaniyan"]["over_600"] is True
+    # but not a US person, so no 1099
+    assert figures["Yetunde Olaniyan"]["needs_1099"] is False
+
+    assert figures["Evgeniya Dyatlovskaya"]["withdrawn_usd"] == 100.00
+    assert figures["Katerina Mrvova"]["withdrawn_usd"] == 0.00
+
+
+def test_only_katerina_triggers_a_1099_at_600(conn):
+    for source_id, vendor in [("k", "Katerina Mrvova"), ("a", "Ayoka")]:
+        db.upsert_expense(conn, source="wise", source_id=source_id,
+                          date="2026-05-01", amount=700, currency="USD",
+                          amount_usd=700, vendor=vendor, category="contractor")
+    conn.commit()
+
+    figures = db.contractor_totals(conn, 2026)
+    assert figures["Katerina Mrvova"]["needs_1099"] is True
+    assert figures["Katerina Mrvova"]["form"] == "W-9"
+    assert figures["Yetunde Olaniyan"]["needs_1099"] is False
+    assert figures["Yetunde Olaniyan"]["form"] == "W-8BEN"
+
+
+def test_a_jar_allocation_never_counts_toward_the_600_threshold(conn):
+    """
+    THE ACCOUNTING RULE.
+
+    Money moved into someone's Wise jar has not been paid to them - it is
+    still Liuba's money, sitting in her own account under a label. It is not
+    deductible and it does not count toward $600.
+
+    Here someone has $5,000 sitting in their jar and has withdrawn $400.
+    The threshold figure must be $400.
+    """
+    db.record_jar_balance(conn, balance_id="bal_A", jar_name="Ayoka",
+                          person="Yetunde Olaniyan", observed_on="2026-08-20",
+                          amount=5000, currency="USD", amount_usd=5000)
+    db.upsert_expense(conn, source="wise", source_id="w1", date="2026-08-20",
+                      amount=400, currency="USD", amount_usd=400,
+                      vendor="Ayoka", category="contractor")
+    conn.commit()
+
+    figures = db.contractor_totals(conn, 2026)
+    assert figures["Yetunde Olaniyan"]["withdrawn_usd"] == 400.00
+    assert figures["Yetunde Olaniyan"]["over_600"] is False
+
+    # and the jar money is not an expense at all
+    assert db.totals(conn, 2026)["expenses_usd"] == 400.00
+    assert db.total_in_jars_usd(conn) == 5000.00
+
+
+def test_an_owners_draw_is_not_a_deductible_expense(conn):
+    """
+    Liuba paying herself is not a business expense. It stays visible, with a
+    reason, but must not reduce taxable profit or reach anyone's total.
+    """
+    db.upsert_expense(conn, source="wise", source_id="draw1",
+                      date="2026-08-20", amount=2000, currency="USD",
+                      amount_usd=2000, category="owner draw",
+                      description="transfer to personal account",
+                      excluded=True,
+                      exclusion_reason="owner's draw - not a business expense")
+    conn.commit()
+
+    assert db.totals(conn, 2026)["expenses_usd"] == 0.00
+    assert conn.execute("SELECT COUNT(*) FROM expenses").fetchone()[0] == 1
