@@ -157,6 +157,52 @@ invoice paid on 7 July. One payment, three records, counted once.
 
 ---
 
+## Upwork — the email route only works going forward
+
+Upwork emails every payment with exactly what is needed:
+
+```
+Listing Pricelabs and Hostaway configuration for 8   <- contract
+Amount billed        $270.83                         <- GROSS
+Fees & Taxes         ($28.87)                        <- deductible
+Estimated earnings   $241.96                         <- net
+```
+
+Better than a CSV export: it arrives automatically, needs no new credential
+(it reuses the Gmail app password Stage 10 sets up anyway), and separates
+gross from fee - which the bank deposit does not.
+
+**But the mailbox has no history.** Only two Upwork financial emails exist in
+it, both after 20 July 2026. The reason is in the mailbox itself: an
+"email address change request" dated 2026-07-20. Upwork notifications before
+that went to a different address.
+
+So:
+- **August onward** - automatic, from Gmail
+- **January to July** - no email trail here. Needs Upwork's own CSV export
+  (Reports -> Transaction History), imported once like HubSpot and
+  Capital One
+
+The $11,797.31 of Upwork income for Jan-Jul is net of roughly 10.7% in fees,
+so gross is nearer $13,200 and about $1,400 of deductible fees are currently
+missing.
+
+---
+
+## The tax sheet is separate
+
+Decided 24 August 2026: rather than adding tabs to `Hostlyft_Accounting_2026`,
+a **separate Google Sheet** lives beside it in the same Drive folder.
+
+The reason the two cannot share a convention: her accounting sheet is
+organised so team payouts work - some clients pay after the work is done, and
+payouts run at month end, so a month's tab groups work by service period.
+**Tax needs cash received.** Those genuinely differ, and forcing one sheet to
+do both would corrupt whichever it was not built for.
+
+So the accounting sheet keeps its own convention and is never written to.
+The tax sheet is cash-received throughout.
+
 ## Still open
 
 - **Whose business is the Brian work** — Hostlyft, or independent like Marcus?
