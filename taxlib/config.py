@@ -151,10 +151,14 @@ CONTRACTORS = [
         # "Olaniyan" is deliberately NOT an alias: Olaide Olaniyan is a
         # different person on this same roster. See the ambiguity check below.
         "aliases": ["Ayoka", "Yetunde"],
+        # Someone else who receives money on her behalf. Her brother.
+        "payment_aliases": ["Olatunbosun"],
         "us_person": False,
         "form": "W-8BEN",
         "issues_1099": False,
-        "note": "Known as Ayoka. Not a US person.",
+        "note": ("Known as Ayoka. Not a US person. Some payments go to her "
+                 "brother Olatunbosun Olaniyan on her behalf - the work is "
+                 "hers, so the deduction and the W-8BEN are hers too."),
     },
     {
         "name": "Olaide Olaniyan",
@@ -172,10 +176,14 @@ CONTRACTORS = [
     {
         "name": "Evgeniya Dyatlovskaya",
         "aliases": ["Jane", "Evgeniya", "Dyatlovskaya"],
+        # Receives on her behalf.
+        "payment_aliases": ["Dmitry Kapitulskiy", "Kapitulskiy"],
         "us_person": False,
         "form": "W-8BEN",
         "issues_1099": False,
-        "note": "Known as Jane. Not a US person.",
+        "note": ("Known as Jane. Not a US person. Some payments go to Dmitry "
+                 "Kapitulskiy on her behalf - the work is hers, so the "
+                 "deduction and the W-8BEN are hers too."),
     },
     {
         "name": "Sunniva Texe",
@@ -222,10 +230,21 @@ def contractor(name):
 
 def all_names_for(person):
     """
-    Every label a transfer to this person might carry: their full name, and
-    each nickname or surname.
+    Every label a transfer to this person might carry.
+
+    Three kinds:
+      the full name        "Yetunde Olaniyan"
+      nicknames            "Ayoka"
+      payment aliases      somebody else who receives money on their behalf
+
+    That last kind matters for tax as well as matching. Paying a
+    contractor's relative instead of the contractor does not move who earned
+    it: the deduction, the $600 threshold and the tax form all still belong
+    to the person who did the work.
     """
-    return [person["name"]] + list(person.get("aliases", []))
+    return ([person["name"]]
+            + list(person.get("aliases", []))
+            + list(person.get("payment_aliases", [])))
 
 
 def ambiguous_aliases():

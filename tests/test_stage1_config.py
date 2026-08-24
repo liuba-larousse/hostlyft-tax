@@ -356,3 +356,39 @@ def test_accents_do_not_break_the_ambiguity_check():
     """A shared surname stays ambiguous however it is accented."""
     with pytest.raises(config.AmbiguousContractor):
         config.match_contractor("payment to Olániyan")
+
+
+# ---------------------------------------------------------------------------
+#  Paid on somebody else's behalf
+# ---------------------------------------------------------------------------
+
+def test_a_payment_to_a_relative_counts_for_the_contractor():
+    """
+    Ayoka's brother Olatunbosun receives some of her money; Dmitry
+    Kapitulskiy receives some of Jane's.
+
+    Who was paid does not change who EARNED it. The deduction, the $600
+    threshold and the tax form all belong to the person who did the work, so
+    these must resolve to the contractor - not to nobody, and not to a
+    different contractor.
+    """
+    assert config.match_contractor(
+        "olatunbosun olaniyan")["name"] == "Yetunde Olaniyan"
+    assert config.match_contractor(
+        "Sent money to Dmitry Kapitulskiy")["name"] == "Evgeniya Dyatlovskaya"
+
+
+def test_a_payment_alias_does_not_capture_the_owner():
+    """
+    Dmitry Kapitulskiy is Jane's; Liubov Kapitulskaya is Liuba herself.
+    The surnames differ by two letters, and confusing them would turn an
+    owner's draw into a deductible contractor payment.
+    """
+    assert config.match_contractor("Liubov Kapitulskaya") is None
+    assert config.match_contractor("Sent money to Liubov Kapitulskaya") is None
+
+
+def test_the_bare_shared_surname_is_still_refused():
+    """Adding Olatunbosun must not weaken the Olaniyan ambiguity check."""
+    with pytest.raises(config.AmbiguousContractor):
+        config.match_contractor("Payment to Olaniyan")

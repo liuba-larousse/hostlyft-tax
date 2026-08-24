@@ -135,15 +135,22 @@ def jar_name_of(description):
 # ===========================================================================
 
 def find_already_counted(connection, amount, currency, date,
-                         window=MATCH_WINDOW_DAYS):
+                         window=MATCH_WINDOW_DAYS, ignore_source_id=None):
     """
     Look for income already recorded that this payment is the arrival of.
 
     Matches on exact amount and currency within a few days. Returns
-    (row, exact) - or (None, False) if nothing is close.
+    (row, how) - or (None, None) if nothing is close.
 
     Also checks stripe_payouts, because a Stripe payout is the NET of an
     invoice and so never equals the invoice amount.
+
+    `ignore_source_id` MUST be the row being classified.
+
+    Without it, the second run of the importer finds the row the FIRST run
+    created, concludes the money was already counted, and excludes it. The
+    totals then quietly collapse to the Stripe-only figure - no error, just
+    a smaller number every time you re-run. Found exactly that way.
     """
     day = dt.date.fromisoformat(date)
     low = (day - dt.timedelta(days=window)).isoformat()
@@ -159,8 +166,10 @@ def find_already_counted(connection, amount, currency, date,
 
     income = connection.execute(
         "SELECT * FROM income WHERE currency = ? AND amount = ? "
-        "AND excluded = 0 AND date BETWEEN ? AND ?",
-        (currency.upper(), amount, low, high)).fetchone()
+        "AND excluded = 0 AND date BETWEEN ? AND ? "
+        "AND (source_id IS NULL OR source_id != ?)",
+        (currency.upper(), amount, low, high,
+         ignore_source_id or "")).fetchone()
     if income:
         return income, "invoice"
 
@@ -172,7 +181,7 @@ def find_already_counted(connection, amount, currency, date,
 # ===========================================================================
 
 def classify_credit(connection, *, description, details_type, amount,
-                    currency, date, profile):
+                    currency, date, profile, source_id=None):
     """
     Decide what an incoming payment is. Returns a dictionary describing the
     decision, always including `kind` and `reason`.
@@ -201,7 +210,8 @@ def classify_credit(connection, *, description, details_type, amount,
     for processor in PROCESSORS:
         if not _contains(sender, processor["match"]):
             continue
-        matched, how = find_already_counted(connection, amount, currency, date)
+        matched, how = find_already_counted(connection, amount, currency, date,
+                                            ignore_source_id=source_id)
         if matched:
             return {"kind": "not_income", "processor": processor["name"],
                     "matched": how,
@@ -223,7 +233,8 @@ def classify_credit(connection, *, description, details_type, amount,
 
     for pattern, (client, business) in CLIENT_SENDERS.items():
         if _contains(sender, [pattern]):
-            matched, how = find_already_counted(connection, amount, currency, date)
+            matched, how = find_already_counted(connection, amount, currency,
+                                                date, ignore_source_id=source_id)
             if matched:
                 return {"kind": "not_income", "client": client,
                         "matched": how,
@@ -427,7 +438,7 @@ def build_records(connection, transactions, *, profile_label, business,
             decision = classify_credit(
                 connection, description=description, details_type=details_type,
                 amount=abs(amount), currency=currency, date=date,
-                profile=profile_label)
+                profile=profile_label, source_id=source_id)
 
             if personal and decision["kind"] in ("unknown", "jar_move"):
                 # Personal life. Dropped without being recorded anywhere.

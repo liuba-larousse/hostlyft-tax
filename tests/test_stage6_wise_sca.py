@@ -166,3 +166,79 @@ def test_a_key_written_and_read_back_still_signs(tmp_path):
     signature = wise_sca.sign_token(loaded, "round-trip-code")
 
     assert wise_sca.verify_signature(public_pem, "round-trip-code", signature)
+
+
+# ---------------------------------------------------------------------------
+#  The importer must not match against its own previous run
+# ---------------------------------------------------------------------------
+
+class TestNoSelfMatching:
+    """
+    The double-count check looks for income already recorded that an
+    incoming payment is the arrival of.
+
+    On the second run, the rows the FIRST run created are sitting in that
+    same table. Without care the importer finds its own work, decides the
+    money was already counted, and excludes it - so the totals shrink a
+    little every time you re-run. No error; just a smaller number.
+
+    Found by running the real importer four times.
+    """
+
+    def _db(self):
+        from taxlib import db
+        return db.init_db(":memory:")
+
+    def test_a_row_does_not_match_itself(self):
+        from taxlib import db, wise_import
+
+        conn = self._db()
+        db.upsert_income(conn, source="wise", source_id="wise:TRANSFER-1",
+                         date="2026-08-05", amount=4000, currency="USD",
+                         amount_usd=4000, business="marcus")
+        conn.commit()
+
+        matched, _ = wise_import.find_already_counted(
+            conn, 4000, "USD", "2026-08-05",
+            ignore_source_id="wise:TRANSFER-1")
+        assert matched is None, "the row matched itself"
+        conn.close()
+
+    def test_a_genuinely_different_row_still_matches(self):
+        """The protection must not disable the check it is protecting."""
+        from taxlib import db, wise_import
+
+        conn = self._db()
+        db.upsert_income(conn, source="stripe", source_id="in_INVOICE",
+                         date="2026-08-03", amount=234, currency="USD",
+                         amount_usd=234)
+        conn.commit()
+
+        matched, how = wise_import.find_already_counted(
+            conn, 234, "USD", "2026-08-10",
+            ignore_source_id="wise:TRANSFER-9")
+        assert matched is not None
+        assert how == "invoice"
+        conn.close()
+
+    def test_classifying_the_same_payment_twice_gives_the_same_answer(self):
+        from taxlib import db, wise_import
+
+        conn = self._db()
+        args = dict(description="Received money from CLOUD9 WINDY CITY",
+                    details_type="DEPOSIT", amount=4000, currency="USD",
+                    date="2026-08-05", profile="personal",
+                    source_id="personal:TRANSFER-1")
+
+        first = wise_import.classify_credit(conn, **args)
+        assert first["kind"] == "income"
+
+        # what the first run would have written
+        db.upsert_income(conn, source="wise", source_id="personal:TRANSFER-1",
+                         date="2026-08-05", amount=4000, currency="USD",
+                         amount_usd=4000, business="marcus")
+        conn.commit()
+
+        second = wise_import.classify_credit(conn, **args)
+        assert second["kind"] == "income", "second run excluded its own row"
+        conn.close()
