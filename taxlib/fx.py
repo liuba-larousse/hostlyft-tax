@@ -244,6 +244,14 @@ def convert(connection, amount, currency, date, quote_currency="USD",
 
 def rows_needing_conversion(connection, table, tax_year=None):
     """Everything that has no US dollar figure yet."""
+    if table == "wise_jars":
+        # jars have no tax_year; they are dated by when they were observed
+        return connection.execute(
+            "SELECT id, observed_on AS date, amount, currency, "
+            "       jar_name AS description "
+            "FROM wise_jars WHERE amount_usd IS NULL ORDER BY observed_on"
+        ).fetchall()
+
     where_year = "AND tax_year = ?" if tax_year else ""
     params = (tax_year,) if tax_year else ()
     return connection.execute(
@@ -274,7 +282,9 @@ def convert_pending(connection, tax_year=None, dry_run=False, fetcher=None):
     """
     converted, failed, warnings = [], [], []
 
-    for table in ("income", "expenses"):
+    # wise_jars needs converting as well: jar balances count toward the
+    # FBAR $10,000 test and drive the "still in jars in December" warning.
+    for table in ("income", "expenses", "wise_jars"):
         for row in rows_needing_conversion(connection, table, tax_year):
             try:
                 result = convert(connection, row["amount"], row["currency"],

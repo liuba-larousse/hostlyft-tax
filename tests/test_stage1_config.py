@@ -324,3 +324,35 @@ def test_adding_a_colliding_name_would_be_caught_automatically(monkeypatch):
     assert "katerina" in config.ambiguous_aliases()
     with pytest.raises(config.AmbiguousContractor):
         config.match_contractor("payment to Katerina")
+
+
+# ---------------------------------------------------------------------------
+#  Accented names
+# ---------------------------------------------------------------------------
+
+def test_an_accented_name_still_matches():
+    """
+    THE ONE THAT COST REAL MONEY.
+
+    Wise writes "Kateřina Mrvová". The roster says "Katerina Mrvova". As
+    plain strings those differ, so a $372 contractor payment to the one
+    person who needs a 1099 was not counting toward her $600 threshold -
+    silently, with no error.
+    """
+    for spelling in ["Kateřina Mrvová", "KATEŘINA", "Katerina Mrvova",
+                     "payment to Kateřina"]:
+        matched = config.match_contractor(spelling)
+        assert matched is not None, f"{spelling} matched nobody"
+        assert matched["name"] == "Katerina Mrvova", spelling
+
+
+def test_stripping_accents_does_not_create_false_matches():
+    """Removing accents must not make unrelated names collide."""
+    assert config.match_contractor("Jánet Smith") is None
+    assert config.match_contractor("Sünnivale Ltd") is None
+
+
+def test_accents_do_not_break_the_ambiguity_check():
+    """A shared surname stays ambiguous however it is accented."""
+    with pytest.raises(config.AmbiguousContractor):
+        config.match_contractor("payment to Olániyan")

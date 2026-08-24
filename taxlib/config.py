@@ -191,6 +191,22 @@ CONTRACTORS = [
 ]
 
 
+def _plain(text):
+    """
+    Strip accents so names match however they are spelled.
+
+    Wise writes "Kateřina Mrvová"; the roster says "Katerina Mrvova". Without
+    this they are different strings, and payments to the one person who
+    needs a 1099 would never count toward her $600 threshold.
+
+    NFKD splits an accented letter into the letter plus a combining mark;
+    dropping the marks leaves plain ASCII.
+    """
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", text or "")
+                   if not unicodedata.combining(c))
+
+
 def contractor_names():
     """The canonical full names, in roster order."""
     return [person["name"] for person in CONTRACTORS]
@@ -234,7 +250,7 @@ def ambiguous_aliases():
     for person in CONTRACTORS:
         # every distinct word across their full name and every alias
         for label in all_names_for(person):
-            for word in label.split():
+            for word in _plain(label).split():
                 if len(word) > 2:
                     owners[word.lower()].add(person["name"])
 
@@ -275,15 +291,18 @@ def match_contractor(text, strict=True):
     ambiguous = ambiguous_aliases()
 
     # A full-name match always wins - it is unambiguous by definition.
+    plain_text = _plain(text)
     for person in CONTRACTORS:
-        if re.search(rf"\b{re.escape(person['name'])}\b", text, re.IGNORECASE):
+        if re.search(rf"\b{re.escape(_plain(person['name']))}\b",
+                     plain_text, re.IGNORECASE):
             return person
 
     # Then nicknames and first names, skipping anything shared.
     matched, shared = [], []
     for person in CONTRACTORS:
         for label in all_names_for(person):
-            if not re.search(rf"\b{re.escape(label)}\b", text, re.IGNORECASE):
+            if not re.search(rf"\b{re.escape(_plain(label))}\b",
+                             plain_text, re.IGNORECASE):
                 continue
             if label.lower() in ambiguous:
                 shared.append((label, person["name"]))
@@ -310,11 +329,12 @@ def match_contractor(text, strict=True):
     # "no match", it is "cannot tell which", and the two need different
     # handling: one becomes an ordinary expense, the other must be reviewed.
     for word in ambiguous:
-        if re.search(rf"\b{re.escape(word)}\b", text, re.IGNORECASE):
+        if re.search(rf"\b{re.escape(word)}\b", plain_text, re.IGNORECASE):
             candidates = sorted(
                 person["name"] for person in CONTRACTORS
                 if re.search(rf"\b{re.escape(word)}\b",
-                             " ".join(all_names_for(person)), re.IGNORECASE))
+                             _plain(" ".join(all_names_for(person))),
+                             re.IGNORECASE))
             if strict:
                 raise AmbiguousContractor(word, candidates)
             return None
