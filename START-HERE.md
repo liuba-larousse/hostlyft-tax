@@ -150,3 +150,33 @@ tickbox. Make a new one.
 
 **You get genuinely stuck** — you can run `claude` from any folder, even without
 the code downloaded, and just describe what you're seeing. It can help from there.
+
+---
+
+## One thing to know about now, for much later
+
+You're setting this up on this Mac, but the automatic reminders need to live on
+your **main** Mac. That move is the very last step, after everything works.
+
+It's worth knowing now because of one detail: `git clone` brings the *code*, but
+deliberately never carries your **secrets** or your **database**. Those are kept
+out of GitHub on purpose — they're your API tokens and your actual financial
+records.
+
+So the final step will be:
+
+1. Clone the code onto your main Mac (same commands as Step 3, nothing new)
+2. **AirDrop the database file** across — one file, direct Mac to Mac, never
+   through email or cloud storage
+3. **Create the secrets fresh** on the main Mac rather than copying them. You
+   re-enter the Stripe key and Gmail password, generate a new Wise key and
+   re-upload its public half, and re-download the Google file. Nothing sensitive
+   travels between machines this way.
+4. Run one command that checks everything works on the new machine before you
+   trust it
+5. Switch on the schedule
+6. **Delete the secrets from this Mac**, so live credentials aren't left lying
+   around on a machine you're no longer using for it
+
+Nothing to do about this yet. It's here so it isn't a surprise at the end.
+

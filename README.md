@@ -97,7 +97,22 @@ python -m pytest
 | `scripts/wise_keys.py` | Creates and checks the Wise key pair. |
 | `scripts/` | The things you actually run — pulling from Stripe, calculating tax, sending reminders. |
 | `tests/` | The automatic checks. |
-| `tax/` | **Your private data.** Secrets and database. Never uploaded. |
+| `tax/` | **Your private data.** Secrets, database and Wise signing key. Never uploaded. |
+| `.gitignore` | Keeps secrets, the database, the Wise signing key and bank exports out of GitHub. |
+
+## What it will do
+
+- Pull paid invoices from **Stripe** as itemized income (gross, with processor
+  fees recorded separately as deductible expenses)
+- Pull **Wise** transactions for expenses, tagging Stripe payouts as internal
+  transfers so income is never double-counted
+- Read the per-person **Wise Jars** and reconcile what each team member has
+  earned against what they have actually withdrawn
+- Convert every amount to USD using the rate on the transaction's date
+- Write reconciliation tabs into the existing `Hostlyft_Accounting_2026` Google
+  Sheet — new tabs only, never touching the originals
+- Estimate quarterly US federal tax and send desktop + email reminders
+- Track contractor payment thresholds and which tax forms are on file
 
 ### Where your secrets live
 
