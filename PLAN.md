@@ -362,9 +362,12 @@ her from underpayment penalties regardless of how this year lands.
 generating one at myaccount.google.com/apppasswords. Her address:
 help.hostlyft@gmail.com.
 
-Schedule:
-- **Quarterly tax** — one week before Apr 15, Jun 15, Sep 15, Jan 15.
-  Cron: `0 9 8 1,4,6,9 *`
+**Scheduling is NOT set up in this stage.** Build the alert scripts so they can be
+run by hand and tested; the schedule is installed last, in Stage 13, on her main
+computer. Each alert must be runnable on demand.
+
+Alerts:
+- **Quarterly tax** — one week before Apr 15, Jun 15, Sep 15, Jan 15
 - **FBAR** — late March, October backstop. She runs her business through Wise, a
   foreign account. If all foreign accounts combined exceeded **$10,000 at any
   point**, **FinCEN Form 114** is required — filed with FinCEN, *not* the IRS. Due
@@ -375,13 +378,8 @@ Schedule:
   $8,000 left in jars costs ~**$1,224** in real tax. Target: **jars empty by ~20
   December**. Alert from 1 December so she can chase.
 
-Two Mac traps to document — both fail **silently**:
-- `cron` needs **Full Disk Access** (System Settings → Privacy & Security)
-- Terminal needs **notification permission** or `osascript` alerts never appear
-
 Testing, which she asked for explicitly: `--test-notify` fires both immediately,
-`--dry-run` shows what would happen without sending, `/var/mail/$USER` confirms
-cron fired.
+`--dry-run` shows what would happen without sending.
 
 ### Stage 11 — Google Sheet reconciliation
 
@@ -407,6 +405,127 @@ Never writes to her existing tabs. Refuses to run rather than overwrite anything
 - **Sunniva still gets a year-end flag even if under $600**, as she asked
 - Alerts recorded so each fires once
 
+### Stage 13 — Scheduling (LAST — and on her main computer)
+
+**Do this only after every other stage is built, tested and working by hand.** She
+was explicit: the schedule goes on her **main computer**, which may not be the
+machine the build happens on. See "Which machine" below.
+
+**Her choice: launchd for the alerts, cron for the daily sync.**
+
+Why the split. `cron` skips any run scheduled while the Mac is asleep — silently,
+with no catch-up. For the daily sync that is tolerable, because each run re-reads a
+trailing window and a missed day is picked up by the next one. For the quarterly
+tax alert, the FBAR reminder and the 1 December jars warning, a silently skipped
+run defeats the entire purpose, so those use `launchd`, whose
+`StartCalendarInterval` runs a missed job when the Mac next wakes.
+
+| Job | Mechanism | When |
+|---|---|---|
+| Daily sync | cron | **11:00 daily** — her working hours, most likely awake |
+| Weekly digest (exceptions only) | cron | Monday 11:00 |
+| Monthly close + reconciliation | cron | 1st, 11:00 |
+| Quarterly tax estimate | **launchd** | Apr 8, Jun 8, Sep 8, Jan 8 |
+| FBAR | **launchd** | Late March, October backstop |
+| Jars warning | **launchd** | 1 December |
+| Forms check (W-9 / W-8BEN) | **launchd** | January |
+
+Two Mac traps to document — both fail **silently**:
+- `cron` needs **Full Disk Access** (System Settings → Privacy & Security) or jobs
+  never run
+- Terminal needs **notification permission** or `osascript` alerts never appear
+
+If 11:00 runs are often missed because the Mac is closed, moving the sync to
+launchd is a one-line change — note this in the README rather than pre-emptively
+complicating it.
+
+Verification she asked for: trigger each job manually first, confirm the
+notification and email arrive, then check the log shows the scheduled run firing on
+its own before trusting it. `/var/mail/$USER` confirms cron fired; `launchctl list`
+shows the launchd jobs.
+
+---
+
+## Ongoing operation — this is an automation, not a one-off
+
+She confirmed this must run continuously, not be re-run by hand.
+
+**Daily sync** (`run_daily.py`): pull Stripe → pull Wise (both profiles) → convert
+to USD → categorize → check contractor thresholds. Silent unless something needs
+her.
+
+**Two properties that make repetition safe:**
+
+1. **Idempotent.** Every record carries its Stripe/Wise ID, so a repeat run updates
+   rather than inserts. Running twice can never double her income. This is what
+   makes scheduling safe at all — test it explicitly.
+2. **Trailing 30-day window.** Each run re-reads the last 30 days, not merely
+   "since last sync". So a missed run is not a lost run, and — importantly —
+   Stripe refunds and Wise corrections that alter an *already-recorded*
+   transaction get picked up.
+
+First run backfills from 1 January 2026; subsequent runs use the trailing window.
+
+**Weekly digest** (Monday) — **exceptions only**, her explicit choice. Send only
+when something needs her: uncategorised vendors, a contractor approaching or
+crossing $600, a failed sync, a reconciliation mismatch, a jar balance growing
+unusually. A silent week means nothing needs her. Do not send routine "all is well"
+mail — it trains her to ignore the channel.
+
+**Monthly** (1st) — reconcile team earned/in-jar/withdrawn, refresh sheet tabs,
+full summary. Matches her sheet's monthly tabs and one-month payout lag.
+
+**Failure alerting — build this, it is not optional.** A silently broken automation
+is worse than none, because she will trust it:
+
+- Any failed run emails her with the reason (expired Stripe key, Wise SCA
+  rejection, network failure, Google credentials revoked)
+- A **heartbeat check**: if no sync has succeeded in 7 days, that is itself an
+  alert
+- A rotating log file recording every run, what it did, and what it changed
+
+**Token expiry is a when, not an if.** Wise personal tokens and Google service
+account keys can be revoked or expire. Fail with a plain-English message naming
+which credential died and how to replace it — not a stack trace.
+
+### Migration to her main Mac — CONFIRMED, this WILL happen
+
+**She is building on her current MacBook Pro and switching to a different main Mac
+at the very end.** So Stage 13 is a *migration*, not merely a schedule install.
+
+`git clone` brings the code. It deliberately does **not** bring:
+
+- `.env` — Stripe key, Wise token, Gmail app password, Google sheet ID
+- the Wise private signing key
+- the Google service-account JSON
+- `hostlyft_tax.db` — every financial record
+
+**Recommended: move the data, regenerate the secrets.**
+
+- **Database** — AirDrop the single `.db` file. Mac-to-Mac, encrypted, never
+  touching cloud storage or email. It carries transaction history, categorisation
+  decisions and the record of which alerts already fired, so copying beats
+  rebuilding.
+- **Secrets** — create fresh on the main Mac rather than copying. Stripe key and
+  Gmail app password are simply re-entered. The Wise keypair is regenerated and its
+  public half re-uploaded to her Wise settings (~10 min). The Google service-account
+  JSON is re-downloaded from the Cloud console. **No private key travels between
+  machines.**
+
+Fallback if regeneration proves awkward: AirDrop those too — acceptable between two
+Macs she owns, never via email or cloud sync.
+
+**Then, and only then:**
+
+1. `check_setup.py` — one command verifying every dependency on the new machine:
+   env vars present, Stripe authenticates, Wise authenticates *including the SCA
+   signature*, Google Sheets writable, database readable, desktop notification
+   appears, test email arrives. Turns "did I move everything?" into a yes/no.
+2. Install the schedule.
+3. **Delete `.env`, the keys and the database from the build Mac.** Live
+   credentials left on a secondary machine are a real exposure — put it on the
+   checklist, not in her memory.
+
 ---
 
 ## Tests
@@ -430,6 +549,10 @@ Each stage ships tests runnable in one command:
 12. Katerina's row → 1099-NEC alert; other three → W-8BEN reminders, no 1099
 13. Marcus income is included in the tax total but excluded from Hostlyft-only
     reporting; personal-account rows other than Marcus are never stored
+14. **Idempotency under repetition** — run the daily sync three times over the same
+    period; income, expense and contractor totals must be identical each time
+15. A simulated failure (bad token) produces an email naming the credential, not a
+    stack trace; the heartbeat fires when no sync has succeeded in 7 days
 
 ## Out of scope — flag, don't guess
 
