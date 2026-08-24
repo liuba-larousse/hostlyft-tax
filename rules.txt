@@ -1,0 +1,62 @@
+# ============================================================================
+#  Expense categories - edit this file, not the code
+# ============================================================================
+#
+#  HOW IT WORKS
+#      One rule per line:
+#
+#          category = word, another word, a phrase
+#
+#      If any of those words appears in an expense's vendor or description,
+#      it gets that category. Matching ignores capitals and accents.
+#
+#      Rules are tried top to bottom, so put the specific ones first.
+#      Lines starting with # are notes and are ignored.
+#
+#  WHAT HAPPENS TO ANYTHING THAT MATCHES NOTHING
+#      It stays "uncategorized" and is listed after every run. Nothing is
+#      ever guessed into a category - a wrong category is a wrong deduction,
+#      and it would be invisible.
+#
+#  CONTRACTORS ARE NOT LISTED HERE
+#      They are matched by name, nickname and payment alias in
+#      taxlib/config.py, which also knows who needs a W-9 and who needs a
+#      W-8BEN. Adding them here would split that in two places.
+#
+#  THE SCHEDULE C COLUMN
+#      The bracketed line number is where that category goes on Schedule C.
+#      It is a starting point for filing, not advice.
+
+# --- software and subscriptions ------------------ [Schedule C line 27a] ---
+software = PriceLabs, ClickUp, HubSpot, Supabase, Anthropic, Claude, OpenAI,
+           Google Workspace, Google*Works, GoDaddy, Fathom, Notion, Slack,
+           Zoom, Canva, Airtable, Hostaway, Smoobu, Guesty, Dropbox, Adobe
+
+# --- phone and internet -------------------------- [Schedule C line 25] ----
+phone and internet = Quo, OpenPhone, openpho, Vonage, Skype, Twilio
+
+# --- money movement ------------------------------ [Schedule C line 10] ----
+# What the platforms keep. Deductible, and easy to lose track of because it
+# never appears as a payment you made.
+payment processing = Stripe, Upwork, PayPal, Payoneer, Service Fee,
+                     Multicurrency Settlement, Invoicing
+
+bank fees = Wise, Transferwise, wire fee, bank details
+
+# --- keeping the company legal ------------------- [Schedule C line 17] ----
+compliance and admin = registered agent, Northwest Registered, LegalZoom,
+                       Secretary of State, franchise tax, annual report,
+                       incorporation, EIN
+
+# --- professional services ----------------------- [Schedule C line 17] ----
+professional services = accountant, bookkeep, attorney, lawyer, legal,
+                        consultant, CPA
+
+# --- advertising --------------------------------- [Schedule C line 8] -----
+advertising = Google Ads, Facebook, Meta Platforms, LinkedIn, advertising
+
+# --- travel -------------------------------------- [Schedule C line 24a] ---
+travel = airline, hotel, Booking.com, Airbnb, Uber, Lyft, train, flight
+
+# --- taxes paid ---------------------------------- [Schedule C line 23] ----
+taxes and licences = sales tax, State Sales Tax, VAT, licence, license

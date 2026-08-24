@@ -94,6 +94,14 @@ python -m pytest
 | `taxlib/fx.py` | Currency conversion, and the saved rates. |
 | `scripts/convert_currency.py` | Puts a US dollar figure on every foreign entry. |
 | `taxlib/wise_sca.py` | Signing, so Wise will release statements. |
+| `taxlib/wise_import.py` | Classifies every Wise transaction. |
+| `scripts/pull_wise.py` | Imports Wise across all three accounts. |
+| `taxlib/csv_import.py` | HubSpot and Upwork file imports. |
+| `scripts/import_files.py` | Runs those file imports. |
+| `taxlib/categorize.py` | Applies the rules in `rules.txt`. |
+| `scripts/categorize.py` | Sorts expenses; lists anything it can't. |
+| `rules.txt` | **Your** plain-English category rules. Edit freely. |
+| `INCOME-SOURCES.md` | Where the money actually comes from. |
 | `scripts/wise_keys.py` | Creates and checks the Wise key pair. |
 | `scripts/` | The things you actually run — pulling from Stripe, calculating tax, sending reminders. |
 | `tests/` | The automatic checks. |
@@ -468,9 +476,9 @@ Each migration step is written so running it twice is harmless. Back up first �
 | 3 | Secrets walkthrough | ✅ done |
 | 4 | Stripe income (gross, with fees as expenses) | ✅ done |
 | 5 | Currency conversion to USD | ✅ done |
-| 6 | Wise — both profiles, jars, double-count prevention | in progress |
-| 7 | Capital One one-time CSV import | not started |
-| 8 | Categorization | not started |
+| 6 | Wise — all three accounts, jars, double-count prevention | ✅ done |
+| 7 | File imports — HubSpot, Upwork (Capital One still to do) | ◐ partial |
+| 8 | Categorization | ✅ done |
 | 9 | Tax calculator (both businesses combined) | not started |
 | 10 | Reminders — quarterly, FBAR, jars, contractor alarm | not started |
 | 11 | Google Sheet reconciliation tabs | not started |
