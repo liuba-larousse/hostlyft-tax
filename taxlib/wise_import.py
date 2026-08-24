@@ -66,8 +66,14 @@ PROCESSORS = [
      "has_invoice_source": True},
     {"match": ["HUBSPOT PAYMENTS"], "name": "HubSpot",
      "has_invoice_source": True},
+    # Upwork earnings are imported from its export, so a payout is the
+    # arrival of income already counted. But a payout is a BATCH of several
+    # earnings, so it never equals any single one - amount matching cannot
+    # find it. Instead, check whether earnings from that platform exist at
+    # all in the period.
     {"match": ["PAYMENT ESCROW"], "name": "Upwork",
-     "has_invoice_source": False},
+     "has_invoice_source": True, "income_source": "upwork",
+     "batched": True},
     {"match": ["PAYONEER"], "name": "Fiverr via Payoneer",
      "has_invoice_source": False},
 ]
@@ -180,6 +186,25 @@ def find_already_counted(connection, amount, currency, date,
 #  CLASSIFYING ONE TRANSACTION
 # ===========================================================================
 
+def has_income_from(connection, source, on_or_before, window_days=120):
+    """
+    Is there income recorded from this platform, covering this payout?
+
+    Needed because a platform payout is a BATCH - Upwork withdraws several
+    earnings at once, so the payout equals no single earning and amount
+    matching can never find it. What CAN be established is whether the
+    earnings behind it were imported at all.
+    """
+    day = dt.date.fromisoformat(on_or_before)
+    since = (day - dt.timedelta(days=window_days)).isoformat()
+    row = connection.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(amount_usd), 0) AS total "
+        "FROM income WHERE source = ? AND excluded = 0 "
+        "AND date BETWEEN ? AND ?",
+        (source, since, on_or_before)).fetchone()
+    return row["n"] > 0, row["total"]
+
+
 def classify_credit(connection, *, description, details_type, amount,
                     currency, date, profile, source_id=None):
     """
@@ -210,6 +235,26 @@ def classify_credit(connection, *, description, details_type, amount,
     for processor in PROCESSORS:
         if not _contains(sender, processor["match"]):
             continue
+        if processor.get("batched"):
+            found, total = has_income_from(connection,
+                                           processor["income_source"], date)
+            if found:
+                return {"kind": "not_income", "processor": processor["name"],
+                        "matched": "batched earnings",
+                        "reason": (f"{processor['name']} payout. The earnings "
+                                   f"behind it are already counted from the "
+                                   f"{processor['name']} export "
+                                   f"(${total:,.2f} in the period), and a "
+                                   f"payout batches several earnings so it "
+                                   f"matches no single one.")}
+            return {"kind": "income", "needs_review": True,
+                    "processor": processor["name"],
+                    "business": config.BUSINESS_HOSTLYFT,
+                    "reason": (f"{processor['name']} payout, and no "
+                               f"{processor['name']} earnings are imported "
+                               f"for this period. Counted so the income is "
+                               f"not lost - but it is NET of their fee.")}
+
         matched, how = find_already_counted(connection, amount, currency, date,
                                             ignore_source_id=source_id)
         if matched:

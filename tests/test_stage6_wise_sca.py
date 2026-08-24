@@ -242,3 +242,67 @@ class TestNoSelfMatching:
         second = wise_import.classify_credit(conn, **args)
         assert second["kind"] == "income", "second run excluded its own row"
         conn.close()
+
+
+class TestBatchedPayouts:
+    """
+    A platform payout is a BATCH. Upwork withdraws several earnings at once,
+    so the payout equals no single earning and amount matching can never
+    find it.
+
+    Before this, importing the Upwork export and then running the Wise
+    import counted the same money twice: once as earnings, once as the
+    payout that delivered them.
+    """
+
+    def test_a_batched_payout_is_excluded_once_its_earnings_are_imported(self):
+        from taxlib import db, wise_import
+
+        conn = db.init_db(":memory:")
+        # three earnings that were paid out together
+        for i, amount in enumerate([270.83, 600.00, 379.25]):
+            db.upsert_income(conn, source="upwork", source_id=f"upwork:{i}",
+                             date="2026-07-12", amount=amount, currency="USD",
+                             amount_usd=amount)
+        conn.commit()
+
+        decision = wise_import.classify_credit(
+            conn, description="Received money from PAYMENT ESCROW I",
+            details_type="DEPOSIT", amount=1250.08, currency="USD",
+            date="2026-07-30", profile="personal", source_id="personal:X")
+
+        assert decision["kind"] == "not_income"
+        assert "already counted" in decision["reason"]
+        conn.close()
+
+    def test_the_payout_is_counted_when_no_earnings_exist(self):
+        """
+        Losing the income entirely would be worse than recording it net.
+        With nothing imported, the payout stands in - flagged as net.
+        """
+        from taxlib import db, wise_import
+
+        conn = db.init_db(":memory:")
+        decision = wise_import.classify_credit(
+            conn, description="Received money from PAYMENT ESCROW I",
+            details_type="DEPOSIT", amount=1250.08, currency="USD",
+            date="2026-07-30", profile="personal", source_id="personal:X")
+
+        assert decision["kind"] == "income"
+        assert decision["needs_review"] is True
+        assert "NET of their fee" in decision["reason"]
+        conn.close()
+
+    def test_earnings_far_outside_the_window_do_not_count(self):
+        """A payout is not explained by earnings from a year earlier."""
+        from taxlib import db, wise_import
+
+        conn = db.init_db(":memory:")
+        db.upsert_income(conn, source="upwork", source_id="upwork:old",
+                         date="2025-01-05", amount=1250.08, currency="USD",
+                         amount_usd=1250.08)
+        conn.commit()
+
+        found, _ = wise_import.has_income_from(conn, "upwork", "2026-07-30")
+        assert found is False
+        conn.close()
