@@ -147,10 +147,10 @@ def test_tax_settings_match_the_established_situation():
     assert config.BASE_CURRENCY == "USD"
 
 
-def test_all_four_contractors_are_on_the_roster():
+def test_everyone_paid_as_a_contractor_is_on_the_roster():
     """Alerts can only fire for people on this list."""
     assert set(config.contractor_names()) == {
-        "Katerina Mrvova", "Yetunde Olaniyan",
+        "Katerina Mrvova", "Yetunde Olaniyan", "Olaide Olaniyan",
         "Evgeniya Dyatlovskaya", "Sunniva Texe",
     }
 
@@ -166,7 +166,8 @@ def test_only_katerina_gets_a_1099():
     assert katerina["form"] == "W-9"
     assert katerina["issues_1099"] is True
 
-    for name in ["Yetunde Olaniyan", "Evgeniya Dyatlovskaya", "Sunniva Texe"]:
+    for name in ["Yetunde Olaniyan", "Olaide Olaniyan",
+                 "Evgeniya Dyatlovskaya", "Sunniva Texe"]:
         person = config.contractor(name)
         assert person["us_person"] is False
         assert person["form"] == "W-8BEN"
@@ -263,3 +264,63 @@ def test_the_blank_template_is_not_ignored():
         capture_output=True,
     )
     assert result.returncode != 0, ".env.example should be tracked by git"
+
+
+# ---------------------------------------------------------------------------
+#  Two people, one surname
+# ---------------------------------------------------------------------------
+
+def test_a_shared_surname_is_detected_automatically():
+    """
+    Yetunde Olaniyan (Ayoka) and Olaide Olaniyan are different people.
+    Neither has "Olaniyan" written as an alias - the clash is between their
+    SURNAMES - so it has to be worked out from the roster rather than
+    remembered.
+    """
+    assert "olaniyan" in config.ambiguous_aliases()
+
+
+def test_full_names_still_match_exactly_despite_the_shared_surname():
+    assert config.match_contractor(
+        "Sent money to Olaide Olaniyan")["name"] == "Olaide Olaniyan"
+    assert config.match_contractor(
+        "Sent money to Yetunde Olaniyan")["name"] == "Yetunde Olaniyan"
+    assert config.match_contractor(
+        "Transfer to Ayoka")["name"] == "Yetunde Olaniyan"
+
+
+def test_a_bare_shared_surname_is_refused_not_guessed():
+    """
+    THE ONE THIS EXISTS FOR.
+
+    A payment labelled only "Olaniyan" cannot be attributed. Guessing would
+    either push someone over the $600 threshold who is not there, or hide
+    someone who is. So it raises, and the caller flags it for review.
+    """
+    with pytest.raises(config.AmbiguousContractor) as caught:
+        config.match_contractor("Payment to Olaniyan")
+
+    message = str(caught.value)
+    assert "Olaide Olaniyan" in message
+    assert "Yetunde Olaniyan" in message
+    assert "Refusing to guess" in message
+
+
+def test_a_caller_that_only_wants_a_yes_or_no_gets_none():
+    assert config.match_contractor("Payment to Olaniyan", strict=False) is None
+
+
+def test_adding_a_colliding_name_would_be_caught_automatically(monkeypatch):
+    """
+    The clash list is derived, not hand-written. Someone joining with a name
+    that collides is detected without anyone remembering to update a list.
+    """
+    roster = config.CONTRACTORS + [{
+        "name": "Katerina Nowak", "aliases": [], "us_person": False,
+        "form": "W-8BEN", "issues_1099": False,
+    }]
+    monkeypatch.setattr(config, "CONTRACTORS", roster)
+
+    assert "katerina" in config.ambiguous_aliases()
+    with pytest.raises(config.AmbiguousContractor):
+        config.match_contractor("payment to Katerina")

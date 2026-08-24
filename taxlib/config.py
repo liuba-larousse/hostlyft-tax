@@ -148,11 +148,26 @@ CONTRACTORS = [
     },
     {
         "name": "Yetunde Olaniyan",
-        "aliases": ["Ayoka", "Yetunde", "Olaniyan"],
+        # "Olaniyan" is deliberately NOT an alias: Olaide Olaniyan is a
+        # different person on this same roster. See the ambiguity check below.
+        "aliases": ["Ayoka", "Yetunde"],
         "us_person": False,
         "form": "W-8BEN",
         "issues_1099": False,
         "note": "Known as Ayoka. Not a US person.",
+    },
+    {
+        "name": "Olaide Olaniyan",
+        "aliases": ["Olaide"],
+        "us_person": False,
+        "form": "W-8BEN",
+        "issues_1099": False,
+        "note": ("Liuba's husband, and a foreign contractor. Shares a surname "
+                 "with Yetunde Olaniyan, so surname-only matching is refused "
+                 "rather than guessed. Payments to a spouse are deductible on "
+                 "the same terms as any contractor - genuine work at a "
+                 "reasonable rate - but being a related party, the "
+                 "substantiation (a contract, invoices) carries more weight."),
     },
     {
         "name": "Evgeniya Dyatlovskaya",
@@ -197,24 +212,113 @@ def all_names_for(person):
     return [person["name"]] + list(person.get("aliases", []))
 
 
-def match_contractor(text):
+def ambiguous_aliases():
     """
-    Work out which contractor a transaction description refers to, if any.
+    Name fragments that could mean more than one person on the roster.
+
+    Two people share the surname Olaniyan - Yetunde (known as Ayoka) and
+    Olaide (Liuba's husband). A payment labelled only "Olaniyan" genuinely
+    cannot be attributed, so it must never be guessed: crediting it to the
+    wrong person would push someone over the $600 threshold who is not there,
+    or hide someone who is.
+
+    Every word of every name is considered, not just the nicknames listed
+    above - the collision here is between two SURNAMES, and neither is
+    written as an alias. Working it out from the roster means adding another
+    person with a colliding name is caught automatically rather than
+    remembered.
+    """
+    from collections import defaultdict
+
+    owners = defaultdict(set)
+    for person in CONTRACTORS:
+        # every distinct word across their full name and every alias
+        for label in all_names_for(person):
+            for word in label.split():
+                if len(word) > 2:
+                    owners[word.lower()].add(person["name"])
+
+    return {word for word, people in owners.items() if len(people) > 1}
+
+
+class AmbiguousContractor(Exception):
+    """A transaction names someone, but more than one person could match."""
+
+    def __init__(self, label, candidates):
+        self.label = label
+        self.candidates = candidates
+        super().__init__(
+            f"'{label}' could be {' or '.join(candidates)}. "
+            f"Refusing to guess - it is flagged for review instead.")
+
+
+def match_contractor(text, strict=True):
+    """
+    Work out which contractor a transaction description refers to.
 
     Matching is on whole words only. Without that, a short alias would match
-    inside an unrelated word and quietly attribute somebody else's payment.
+    inside an unrelated word and quietly attribute somebody else's payment -
+    "Janet" would become Jane.
 
     Returns the contractor dictionary, or None.
+
+    Raises AmbiguousContractor when the only thing matched is a name shared
+    by two people. That is deliberately an error rather than a best guess:
+    the caller flags it for review. With strict=False it returns None
+    instead, for callers that just want a yes/no.
     """
     import re
 
     if not text:
         return None
 
+    ambiguous = ambiguous_aliases()
+
+    # A full-name match always wins - it is unambiguous by definition.
+    for person in CONTRACTORS:
+        if re.search(rf"\b{re.escape(person['name'])}\b", text, re.IGNORECASE):
+            return person
+
+    # Then nicknames and first names, skipping anything shared.
+    matched, shared = [], []
     for person in CONTRACTORS:
         for label in all_names_for(person):
-            if re.search(rf"\b{re.escape(label)}\b", text, re.IGNORECASE):
-                return person
+            if not re.search(rf"\b{re.escape(label)}\b", text, re.IGNORECASE):
+                continue
+            if label.lower() in ambiguous:
+                shared.append((label, person["name"]))
+            elif person not in matched:
+                matched.append(person)
+
+    if len(matched) == 1:
+        return matched[0]
+    if len(matched) > 1:
+        if strict:
+            raise AmbiguousContractor(
+                text, sorted(person["name"] for person in matched))
+        return None
+
+    if shared:
+        if strict:
+            label = shared[0][0]
+            raise AmbiguousContractor(
+                label, sorted({name for _, name in shared}))
+        return None
+
+    # Nothing matched by name or nickname. Before giving up, check for a
+    # fragment shared by two people - a bare surname, typically. That is not
+    # "no match", it is "cannot tell which", and the two need different
+    # handling: one becomes an ordinary expense, the other must be reviewed.
+    for word in ambiguous:
+        if re.search(rf"\b{re.escape(word)}\b", text, re.IGNORECASE):
+            candidates = sorted(
+                person["name"] for person in CONTRACTORS
+                if re.search(rf"\b{re.escape(word)}\b",
+                             " ".join(all_names_for(person)), re.IGNORECASE))
+            if strict:
+                raise AmbiguousContractor(word, candidates)
+            return None
+
     return None
 
 
