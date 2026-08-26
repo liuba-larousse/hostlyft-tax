@@ -58,5 +58,12 @@ advertising = Google Ads, Facebook, Meta Platforms, LinkedIn, advertising
 # --- travel -------------------------------------- [Schedule C line 24a] ---
 travel = airline, hotel, Booking.com, Airbnb, Uber, Lyft, train, flight
 
+# --- money given back to clients --------------- [Schedule C line 2] -----
+# Refunds reduce what you actually earned. On Schedule C these are
+# "returns and allowances", taken off gross receipts rather than added to
+# expenses - the category is kept separate here so it can be reported that
+# way at filing time.
+refunds to clients = refund, partial refund, credit note, chargeback
+
 # --- taxes paid ---------------------------------- [Schedule C line 23] ----
 taxes and licences = sales tax, State Sales Tax, VAT, licence, license

@@ -192,3 +192,93 @@ def test_running_twice_changes_nothing_the_second_time(rules):
     assert len(first["categorized"]) == 1
     assert second["categorized"] == []
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+#  Entered by hand
+# ---------------------------------------------------------------------------
+
+class TestManualEntry:
+    """
+    Some real transactions appear in no API. Michelle's $131 refund went
+    through HubSpot, whose payment records are not readable through the
+    available connection, and it never touched Wise or the card.
+
+    Without somewhere to put it the choice is to lose the deduction or to
+    invent a number. A small file that says "entered by hand, and here is
+    why" is better than either.
+    """
+
+    def _rows(self, **overrides):
+        row = {"date": "2026-07-19", "kind": "expense", "amount": "131.00",
+               "currency": "USD", "category": "refunds to clients",
+               "who": "Michelle Frankel",
+               "note": "Partial refund of INV-1053, from the sheet note"}
+        row.update(overrides)
+        return [row]
+
+    def test_a_hand_entered_expense_is_recorded(self):
+        from taxlib import manual_entry
+        result = manual_entry.build_records(self._rows(), year=2026)
+
+        assert len(result["expenses"]) == 1
+        row = result["expenses"][0]
+        assert row["amount"] == 131.00
+        assert row["category"] == "refunds to clients"
+        assert row["vendor"] == "Michelle Frankel"
+
+    def test_it_is_always_flagged_for_review(self):
+        """
+        A figure somebody typed must stay visibly different from one an API
+        reported, so it is never mistaken for verified data.
+        """
+        from taxlib import manual_entry
+        row = manual_entry.build_records(self._rows(), year=2026)["expenses"][0]
+        assert row["needs_review"] is True
+        assert "entered by hand" in row["review_note"]
+
+    def test_a_row_without_a_note_is_refused(self):
+        """
+        A hand-entered figure with no explanation is indistinguishable from a
+        mistake a year later.
+        """
+        from taxlib import manual_entry
+        result = manual_entry.build_records(self._rows(note=""), year=2026)
+        assert result["expenses"] == []
+        assert any("needs a note" in p for p in result["problems"])
+
+    def test_a_bad_amount_is_reported_not_swallowed(self):
+        from taxlib import manual_entry
+        result = manual_entry.build_records(self._rows(amount="one hundred"),
+                                            year=2026)
+        assert result["expenses"] == []
+        assert any("not a number" in p for p in result["problems"])
+
+    def test_an_unknown_kind_is_refused(self):
+        from taxlib import manual_entry
+        result = manual_entry.build_records(self._rows(kind="payment"),
+                                            year=2026)
+        assert result["problems"]
+
+
+def test_upwork_company_names_resolve_to_people():
+    """
+    Upwork reports the company; the accounting sheet uses the person. Without
+    the mapping, "Sand, Gravel, and Mulch LLC." and "Brian" look like two
+    different clients and his income lands nowhere in the team splits.
+    """
+    from taxlib import csv_import
+    assert csv_import.person_for_client(
+        "Sand, Gravel, and Mulch LLC.") == "Brian Costley"
+    assert csv_import.person_for_client(
+        "The Cloud Nine Team  Team") == "Marcus Halawi"
+    assert csv_import.person_for_client("Someone Unknown Ltd") is None
+
+
+def test_the_cloud_nine_work_is_tagged_marcus():
+    """The split that bank data alone could not draw."""
+    from taxlib import config, csv_import
+    assert csv_import.business_for_client(
+        "The Cloud Nine Team  Team") == config.BUSINESS_MARCUS
+    assert csv_import.business_for_client(
+        "Sand, Gravel, and Mulch LLC.") == config.BUSINESS_HOSTLYFT

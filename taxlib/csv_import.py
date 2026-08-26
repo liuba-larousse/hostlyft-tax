@@ -101,6 +101,26 @@ UPWORK_CLIENT_BUSINESS = {
     "the cloud nine team": config.BUSINESS_MARCUS,
 }
 
+# Upwork shows the company; the accounting sheet uses the person's name.
+# Without this, "Sand, Gravel, and Mulch LLC." and "Brian" look like two
+# different clients and his income lands nowhere in the team splits.
+UPWORK_CLIENT_PEOPLE = {
+    "sand, gravel, and mulch": "Brian Costley",
+    "the cloud nine team": "Marcus Halawi",
+    "jennifer m": "Jennifer Moraci",
+    "michelle frankel": "Michelle Frankel",
+    "21b": "Chananya Bineth",
+}
+
+
+def person_for_client(client):
+    """The human behind an Upwork client name, where one is known."""
+    low = (client or "").strip().lower()
+    for pattern, person in UPWORK_CLIENT_PEOPLE.items():
+        if pattern in low:
+            return person
+    return None
+
 EARNING_TYPES = {"hourly", "fixed-price", "bonus"}
 FEE_TYPES = {"service fee", "state sales tax"}
 # Moving money to her own bank. Not an expense; the Wise credit is handled
@@ -178,7 +198,7 @@ def build_upwork_records(rows, year=None):
                 "business": business, "date": date,
                 "amount": amount, "currency": "USD", "amount_usd": amount,
                 "description": f"{contract[:110]} [{row.get('Transaction type')}]",
-                "payer": client or None,
+                "payer": person_for_client(client) or client or None,
             })
             continue
 

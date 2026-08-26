@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from taxlib import config, csv_import, db   # noqa: E402
+from taxlib import config, csv_import, db, manual_entry   # noqa: E402
 
 BOLD, GREEN, YELLOW, OFF = "\033[1m", "\033[32m", "\033[33m", "\033[0m"
 
@@ -95,6 +95,23 @@ def main():
     else:
         print(f"\n{YELLOW}No Upwork files in {config.IMPORTS_DIR}{OFF}")
 
+    # ---- entered by hand ----
+    manual_path = manual_entry.ensure_template()
+    manual_rows = manual_entry.read(manual_path)
+    if manual_rows:
+        result = manual_entry.build_records(manual_rows, year=args.year)
+        all_income += result["income"]
+        all_expenses += result["expenses"]
+        print(f"\n{BOLD}ENTERED BY HAND{OFF}  ({manual_path.name})")
+        for row in result["income"] + result["expenses"]:
+            print(f"   {row['date']}  {row['amount']:>9,.2f} {row['currency']}"
+                  f"  {row['description'][:48]}")
+        for problem in result["problems"]:
+            print(f"   {YELLOW}{problem}{OFF}")
+    else:
+        print(f"\n{BOLD}ENTERED BY HAND{OFF}  none "
+              f"({manual_path.relative_to(config.ROOT)} is empty)")
+
     for note in notes:
         print(f"\n{YELLOW}   NOTE: {note}{OFF}")
 
@@ -109,7 +126,7 @@ def main():
     # The file is the whole truth for it, so a row dropped from a corrected
     # export must disappear here too - and an earlier import that used a
     # different id scheme must not linger as a duplicate.
-    for source in ("hubspot", "upwork"):
+    for source in ("hubspot", "upwork", "manual"):
         connection.execute("DELETE FROM income WHERE source = ?", (source,))
         connection.execute("DELETE FROM expenses WHERE source = ?", (source,))
 
