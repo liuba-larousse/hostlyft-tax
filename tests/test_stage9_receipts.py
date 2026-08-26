@@ -171,3 +171,28 @@ def test_running_twice_gives_the_same_answer(conn):
     second = db.totals(conn, 2026)
 
     assert first == second
+
+
+def test_an_invoice_flagged_by_an_earlier_run_is_un_flagged_once_verified(conn):
+    """
+    An invoice wrongly flagged once must not stay flagged for ever. When the
+    reason it was flagged is fixed - a better match, a corrected date - the
+    next run has to clear it.
+
+    Exactly what happened to INV-1049: flagged as untraceable, then its
+    payout was found, and the income stayed missing anyway.
+    """
+    add_invoice(conn, "in_1", "2026-08-03", 3798.00, currency="GBP",
+                source="stripe")
+    conn.execute("UPDATE income SET excluded = 1, needs_review = 1, "
+                 "exclusion_reason = 'no money matching it' "
+                 "WHERE source_id = 'in_1'")
+    conn.commit()
+    assert db.totals(conn, 2026)["income_usd"] == 0.00
+
+    receipts.reconcile(conn, 2026)
+
+    row = conn.execute("SELECT * FROM income WHERE source_id = 'in_1'").fetchone()
+    assert row["excluded"] == 0
+    assert row["exclusion_reason"] is None
+    assert row["needs_review"] == 0

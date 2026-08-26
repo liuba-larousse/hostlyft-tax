@@ -49,8 +49,20 @@ MATCH_WINDOW_DAYS = 45
 PROCESSED = {"HubSpot Payments"}
 
 
+# The invoice's payment date and the payment record's date can differ by a
+# day: HubSpot stamps the payment in UTC, so 2026-07-03 01:23 is the evening
+# of 2026-07-02 locally. Exact-date matching missed INV-1049 for GBP 2,479
+# because of it, and the money - which had arrived, converted to USD - was
+# reported as untraceable.
+PROCESSOR_DATE_SLACK_DAYS = 3
+
+
 def processor_lookup():
-    """(amount, date) -> which processor handled it, from the export."""
+    """
+    (amount, date) -> which processor handled it, from the export.
+
+    Keyed on amount and date, with a few days of slack on the date.
+    """
     lookup = {}
     for path in sorted(config.IMPORTS_DIR.glob("*payment*.csv")):
         if not csv_import.is_payments_export(path):
@@ -64,6 +76,18 @@ def processor_lookup():
             if date and amount:
                 lookup[(amount, date)] = row.get("Processor")
     return lookup
+
+
+def processor_for(lookup, amount, date):
+    """Which processor handled this, allowing for a day or two of drift."""
+    day = dt.date.fromisoformat(date)
+    for offset in range(0, PROCESSOR_DATE_SLACK_DAYS + 1):
+        for shift in ((offset,) if offset == 0 else (offset, -offset)):
+            found = lookup.get(
+                (amount, (day + dt.timedelta(days=shift)).isoformat()))
+            if found:
+                return found
+    return None
 
 
 def reconcile(connection, tax_year, dry_run=False):
@@ -85,9 +109,19 @@ def reconcile(connection, tax_year, dry_run=False):
         date = invoice["date"]
 
         # 1. did it go through a processor?
-        processor = processors.get((amount, date))
+        processor = processor_for(processors, amount, date)
         if invoice["source"] == "stripe" or processor in PROCESSED:
             verified.append(invoice)
+            # Clear any exclusion an earlier run left behind. Without this an
+            # invoice wrongly flagged once stays flagged for ever, even after
+            # the reason it was flagged has been fixed - which is exactly what
+            # happened to INV-1049 once the date-slack change found its
+            # payout.
+            if not dry_run and invoice["excluded"]:
+                connection.execute(
+                    "UPDATE income SET excluded = 0, exclusion_reason = NULL, "
+                    "needs_review = 0, review_note = NULL, updated_at = ? "
+                    "WHERE id = ?", (db._now(), invoice["id"]))
             continue
 
         # 2. is there an unattributed credit that matches?
