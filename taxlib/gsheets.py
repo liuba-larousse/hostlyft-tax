@@ -174,6 +174,72 @@ def service(name="sheets", version="v4"):
                  cache_discovery=False)
 
 
+def call(request, what="Google", attempts=4):
+    """
+    Run a Google API request, retrying the errors that are worth retrying.
+
+    Google returns 500, 502, 503 and 429 under load - they mean "try again",
+    not "something is wrong". One appeared the very first time this was run.
+    A scheduled job must not treat a passing hiccup as a failure, so those
+    are retried with a widening gap; everything else is raised at once,
+    because retrying a genuine error just delays the message.
+    """
+    import time
+
+    from googleapiclient.errors import HttpError
+
+    RETRYABLE = {429, 500, 502, 503, 504}
+    delay = 1.0
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return request.execute()
+        except HttpError as error:
+            status = getattr(getattr(error, "resp", None), "status", None)
+            if status not in RETRYABLE or attempt == attempts:
+                raise
+            time.sleep(delay)
+            delay *= 2
+    raise GoogleError(f"{what} did not respond after {attempts} attempts")
+
+
+def read_notes(sheet_id, tab):
+    """
+    Every cell note on one tab, as {"A1": "the note"}.
+
+    Notes are the little yellow-cornered annotations. They are invisible to
+    the Drive API entirely, which is why this stage had to happen before the
+    tax sheet could be built.
+    """
+    sheets = service()
+    data = call(sheets.spreadsheets().get(
+        spreadsheetId=sheet_id, ranges=[tab], includeGridData=True,
+        fields="sheets(data(startRow,startColumn,rowData(values(note,"
+               "formattedValue))))"), what=f"the {tab} tab")
+
+    def a1(row, column):
+        letters = ""
+        column += 1
+        while column:
+            column, rest = divmod(column - 1, 26)
+            letters = chr(65 + rest) + letters
+        return f"{letters}{row + 1}"
+
+    notes = {}
+    for sheet in data.get("sheets", []):
+        for block in sheet.get("data", []):
+            base_row = block.get("startRow", 0)
+            base_col = block.get("startColumn", 0)
+            for row_offset, row in enumerate(block.get("rowData", [])):
+                for col_offset, cell in enumerate(row.get("values", [])):
+                    if cell.get("note"):
+                        notes[a1(base_row + row_offset, base_col + col_offset)] = {
+                            "note": cell["note"],
+                            "value": cell.get("formattedValue"),
+                        }
+    return notes
+
+
 def describe_error(error, what):
     """Turn a Google API error into something worth reading."""
     status = getattr(getattr(error, "resp", None), "status", None)
