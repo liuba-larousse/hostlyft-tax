@@ -30,7 +30,10 @@
 # --- software and subscriptions ------------------ [Schedule C line 27a] ---
 software = PriceLabs, ClickUp, HubSpot, Supabase, Anthropic, Claude, OpenAI,
            Google Workspace, Google*Works, GoDaddy, Fathom, Notion, Slack,
-           Zoom, Canva, Airtable, Hostaway, Smoobu, Guesty, Dropbox, Adobe
+           Zoom, Canva, Airtable, Hostaway, Smoobu, Guesty, Dropbox, Adobe,
+           Claude.ai, Google One, Vercel, Github, Cursor, Perplexity,
+           HeyGen, Paddle.net, Descript, Loom, Calendly, Typeform,
+           Bitwarden, 1Password, Lastpass, Sentry, Sentinel
 
 # --- phone and internet -------------------------- [Schedule C line 25] ----
 phone and internet = Quo, OpenPhone, openpho, Vonage, Skype, Twilio
@@ -41,12 +44,13 @@ phone and internet = Quo, OpenPhone, openpho, Vonage, Skype, Twilio
 payment processing = Stripe, Upwork, PayPal, Payoneer, Service Fee,
                      Multicurrency Settlement, Invoicing
 
-bank fees = Wise, Transferwise, wire fee, bank details
+bank fees = Wise, Transferwise, wire fee, bank details,
+            Fee/Interest Charge, interest charge, late fee
 
 # --- keeping the company legal ------------------- [Schedule C line 17] ----
 compliance and admin = registered agent, Northwest Registered, LegalZoom,
-                       Secretary of State, franchise tax, annual report,
-                       incorporation, EIN
+                       Secretary of State, SECRETARY OF ST, franchise tax,
+                       annual report, incorporation, EIN, Registered Agents
 
 # --- professional services ----------------------- [Schedule C line 17] ----
 professional services = accountant, bookkeep, attorney, lawyer, legal,
@@ -56,7 +60,9 @@ professional services = accountant, bookkeep, attorney, lawyer, legal,
 advertising = Google Ads, Facebook, Meta Platforms, LinkedIn, advertising
 
 # --- travel -------------------------------------- [Schedule C line 24a] ---
-travel = airline, hotel, Booking.com, Airbnb, Uber, Lyft, train, flight
+travel = airline, hotel, Booking.com, Airbnb, Uber, Lyft, train, flight,
+         SNCF, Trainline, Eurostar, Ryanair, easyJet, Air France,
+         Flixbus, Blablacar, SNCB, Renfe, Trenitalia
 
 # --- money given back to clients --------------- [Schedule C line 2] -----
 # Refunds reduce what you actually earned. On Schedule C these are
@@ -64,6 +70,12 @@ travel = airline, hotel, Booking.com, Airbnb, Uber, Lyft, train, flight
 # expenses - the category is kept separate here so it can be reported that
 # way at filing time.
 refunds to clients = refund, partial refund, credit note, chargeback
+
+# --- money coming back ------------------------- [reduces the expense] ---
+# Cashback is a rebate on spending, not income. It reduces what the
+# purchases cost rather than adding to what was earned - which is why these
+# rows carry a NEGATIVE amount.
+cashback and rebates = cash back reward, cashback, rewards credit
 
 # --- taxes paid ---------------------------------- [Schedule C line 23] ----
 taxes and licences = sales tax, State Sales Tax, VAT, licence, license

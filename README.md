@@ -97,6 +97,7 @@ python -m pytest
 | `taxlib/wise_import.py` | Classifies every Wise transaction. |
 | `scripts/pull_wise.py` | Imports Wise across all three accounts. |
 | `taxlib/csv_import.py` | HubSpot and Upwork file imports. |
+| `taxlib/capitalone.py` | The card statement, with column detection. |
 | `scripts/import_files.py` | Runs those file imports. |
 | `taxlib/categorize.py` | Applies the rules in `rules.txt`. |
 | `scripts/categorize.py` | Sorts expenses; lists anything it can't. |
@@ -487,7 +488,7 @@ Each migration step is written so running it twice is harmless. Back up first �
 | 4 | Stripe income (gross, with fees as expenses) | ✅ done |
 | 5 | Currency conversion to USD | ✅ done |
 | 6 | Wise — all three accounts, jars, double-count prevention | ✅ done |
-| 7 | File imports — HubSpot, Upwork (Capital One still to do) | ◐ partial |
+| 7 | File imports — Capital One, HubSpot, Upwork | ✅ done |
 | 8 | Categorization | ✅ done |
 | 9 | Tax calculator (both businesses combined) | ✅ done |
 | 10 | Reminders — quarterly, FBAR, jars, contractor alarm | not started |

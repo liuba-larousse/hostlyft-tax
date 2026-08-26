@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from taxlib import config, csv_import, db, manual_entry   # noqa: E402
+from taxlib import capitalone, config, csv_import, db, manual_entry   # noqa: E402
 
 BOLD, GREEN, YELLOW, OFF = "\033[1m", "\033[32m", "\033[33m", "\033[0m"
 
@@ -124,6 +124,37 @@ def main():
     else:
         print(f"\n{YELLOW}No Upwork files in {config.IMPORTS_DIR}{OFF}")
 
+    # ---- Capital One ----
+    card_files = [f for f in sorted(glob.glob(str(config.IMPORTS_DIR / "*.csv")))
+                  if "transaction_download" in Path(f).name.lower()
+                  or "capitalone" in Path(f).name.lower()]
+    for path in card_files:
+        try:
+            rows, columns = capitalone.read(path)
+            result = capitalone.build_records(rows, columns, year=args.year)
+        except capitalone.CapitalOneError as error:
+            print(f"\n{YELLOW}{Path(path).name}: {error}{OFF}")
+            continue
+        all_expenses += result["expenses"]
+        notes += result["notes"]
+        spend = sum(r["amount"] for r in result["expenses"] if r["amount"] > 0)
+        back = -sum(r["amount"] for r in result["expenses"] if r["amount"] < 0)
+        print(f"\n{BOLD}CAPITAL ONE{OFF}  ({Path(path).name})")
+        print(f"   USD {spend:>12,.2f}  purchases")
+        if back:
+            print(f"   USD {back:>12,.2f}  refunds and cashback "
+                  f"(reduce what was spent)")
+        print(f"   {len(result['skipped'])} payments to the card skipped")
+
+        duplicates = capitalone.find_duplicates(connection, result["expenses"])
+        if duplicates:
+            print(f"\n   {YELLOW}possible duplicates of something already "
+                  f"recorded — check these:{OFF}")
+            for row, match in duplicates:
+                print(f"      {row['date']}  ${row['amount']:>8,.2f}  "
+                      f"{row['vendor'][:24]:<26} vs {match['source']} "
+                      f"{match['date']} {str(match['vendor'])[:20]}")
+
     # ---- entered by hand ----
     manual_path = manual_entry.ensure_template()
     manual_rows = manual_entry.read(manual_path)
@@ -155,7 +186,7 @@ def main():
     # The file is the whole truth for it, so a row dropped from a corrected
     # export must disappear here too - and an earlier import that used a
     # different id scheme must not linger as a duplicate.
-    for source in ("hubspot", "upwork", "manual"):
+    for source in ("hubspot", "upwork", "manual", "capitalone"):
         connection.execute("DELETE FROM income WHERE source = ?", (source,))
         connection.execute("DELETE FROM expenses WHERE source = ?", (source,))
 
