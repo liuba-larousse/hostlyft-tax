@@ -106,6 +106,11 @@ python -m pytest
 | `scripts/google_login.py` | One-time Google sign-in. |
 | `scripts/build_tax_sheet.py` | Creates or refreshes the tax sheet. |
 | `GOOGLE-SETUP.md` | Walkthrough for connecting Google. |
+| `taxlib/constants_2026.py` | Every tax figure, with its source. |
+| `taxlib/tax.py` | The calculation, step by step. |
+| `scripts/verify_brackets.py` | Prints each figure beside its source. |
+| `scripts/calc_tax.py` | What to set aside, and why. |
+| `scripts/verify_receipts.py` | Traces every invoice to money. |
 | `INCOME-SOURCES.md` | Where the money actually comes from. |
 | `scripts/wise_keys.py` | Creates and checks the Wise key pair. |
 | `scripts/` | The things you actually run — pulling from Stripe, calculating tax, sending reminders. |
@@ -484,7 +489,7 @@ Each migration step is written so running it twice is harmless. Back up first �
 | 6 | Wise — all three accounts, jars, double-count prevention | ✅ done |
 | 7 | File imports — HubSpot, Upwork (Capital One still to do) | ◐ partial |
 | 8 | Categorization | ✅ done |
-| 9 | Tax calculator (both businesses combined) | not started |
+| 9 | Tax calculator (both businesses combined) | ✅ done |
 | 10 | Reminders — quarterly, FBAR, jars, contractor alarm | not started |
 | 11 | Google tax sheet (separate, cash-received) | ✅ done |
 | 12 | Contractor forms tracker (W-9 / W-8BEN) | not started |
