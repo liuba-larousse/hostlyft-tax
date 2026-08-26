@@ -95,7 +95,7 @@ def processor_for(lookup, amount, date):
 MAX_SPLIT_PARTS = 3
 
 
-def _find_split(connection, amount, currency, low, high, used):
+def _find_split(connection, amount, currency, low, high, used, tax_year):
     """
     Two or three credits that together settle one invoice, exactly.
 
@@ -110,8 +110,10 @@ def _find_split(connection, amount, currency, low, high, used):
         "AND (excluded = 0 "
         "     OR exclusion_reason LIKE '%paying an invoice already counted%' "
         "     OR exclusion_reason LIKE '%part of a split payment%') "
-        "AND currency = ? AND date BETWEEN ? AND ? ORDER BY date",
-        (currency, low, high)).fetchall() if row["id"] not in used]
+        "AND currency = ? AND date BETWEEN ? AND ? AND tax_year = ? "
+        "ORDER BY date",
+        (currency, low, high, tax_year)).fetchall()
+        if row["id"] not in used]
 
     for size in range(2, MAX_SPLIT_PARTS + 1):
         for group in combinations(rows, size):
@@ -129,6 +131,7 @@ def reconcile(connection, tax_year, dry_run=False):
     used_credits = set()
 
     verified, matched, unverified, fees = [], [], [], []
+    other_year = []
 
     invoices = connection.execute(
         "SELECT * FROM income WHERE source IN ('hubspot', 'stripe') "
@@ -179,8 +182,10 @@ def reconcile(connection, tax_year, dry_run=False):
             "     OR exclusion_reason LIKE '%paying an invoice already counted%' "
             "     OR exclusion_reason LIKE '%the arrival of invoice%') "
             "AND currency = ? AND amount BETWEEN ? AND ? "
-            "AND date BETWEEN ? AND ? ORDER BY ABS(amount - ?)",
-            (currency, amount - span, amount + span, low, high, amount),
+            "AND date BETWEEN ? AND ? AND tax_year = ? "
+            "ORDER BY ABS(amount - ?)",
+            (currency, amount - span, amount + span, low, high, tax_year,
+             amount),
         ).fetchall()
         candidate = next((row for row in candidates
                           if row["id"] not in used_credits), None)
@@ -190,7 +195,7 @@ def reconcile(connection, tax_year, dry_run=False):
         # after the second. Looking for a single credit finds neither.
         if candidate is None:
             group = _find_split(connection, amount, currency, low, high,
-                                used_credits)
+                                used_credits, tax_year)
             if group:
                 for row in group:
                     used_credits.add(row["id"])
@@ -206,7 +211,8 @@ def reconcile(connection, tax_year, dry_run=False):
                              f"counted there in full, not here",
                              db._now(), row["id"]))
                     connection.execute(
-                        "UPDATE income SET excluded = 0, needs_review = 0, "
+                        "UPDATE income SET excluded = 0, "
+                        "exclusion_reason = NULL, needs_review = 0, "
                         "review_note = NULL, updated_at = ? WHERE id = ?",
                         (db._now(), invoice["id"]))
                 continue
@@ -225,9 +231,9 @@ def reconcile(connection, tax_year, dry_run=False):
                      f"at gross, not here",
                      db._now(), candidate["id"]))
                 connection.execute(
-                    "UPDATE income SET excluded = 0, needs_review = 0, "
-                    "review_note = NULL, updated_at = ? WHERE id = ?",
-                    (db._now(), invoice["id"]))
+                    "UPDATE income SET excluded = 0, exclusion_reason = NULL, "
+                    "needs_review = 0, review_note = NULL, updated_at = ? "
+                    "WHERE id = ?", (db._now(), invoice["id"]))
             if difference > 0:
                 fees.append((invoice, difference))
                 if not dry_run:
@@ -242,7 +248,35 @@ def reconcile(connection, tax_year, dry_run=False):
                                      f"{(invoice['description'] or '')[:60]}"))
             continue
 
-        # 3. nothing found
+        # 3. did the money arrive in a DIFFERENT year?
+        #
+        # An invoice dated 2025-11-11 was marked paid on 2026-02-01 in a
+        # batch tidy-up, but the money arrived on 2025-11-19. On a cash
+        # basis that is 2025 income. Counting it in 2026 would put it in the
+        # wrong return - and reporting it as "no money found" would be
+        # simply wrong, since the money is right there.
+        earlier = connection.execute(
+            "SELECT * FROM income WHERE source = 'wise' "
+            "AND currency = ? AND ABS(amount - ?) < 0.005 "
+            "AND tax_year != ? ORDER BY ABS(julianday(date) - julianday(?)) "
+            "LIMIT 1", (currency, amount, tax_year, date)).fetchone()
+        if earlier is not None and earlier["id"] in used_credits:
+            earlier = None
+
+        if earlier is not None:
+            other_year.append((invoice, earlier))
+            if not dry_run:
+                connection.execute(
+                    "UPDATE income SET excluded = 1, exclusion_reason = ?, "
+                    "needs_review = 0, review_note = NULL, updated_at = ? "
+                    "WHERE id = ?",
+                    (f"the money arrived on {earlier['date']}, so this is "
+                     f"{earlier['tax_year']} income on a cash basis — marked "
+                     f"paid in {tax_year} but not earned in it",
+                     db._now(), invoice["id"]))
+            continue
+
+        # 4. nothing found
         unverified.append(invoice)
         if not dry_run:
             connection.execute(
@@ -262,4 +296,5 @@ def reconcile(connection, tax_year, dry_run=False):
         connection.commit()
 
     return {"verified": verified, "matched": matched,
-            "unverified": unverified, "fees": fees}
+            "unverified": unverified, "fees": fees,
+            "other_year": other_year}

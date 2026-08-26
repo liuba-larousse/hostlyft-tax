@@ -51,6 +51,18 @@ def main():
     if not result["matched"]:
         print("   none")
 
+    if result.get("other_year"):
+        print(f"\n{BOLD}PAID IN A DIFFERENT YEAR — not {args.year} income{OFF}")
+        print("-" * 74)
+        for invoice, credit in result["other_year"]:
+            print(f"   {invoice['date']}  {invoice['amount']:>9,.2f} "
+                  f"{invoice['currency']}  marked paid — but the money "
+                  f"arrived {credit['date']}")
+        print()
+        print("   On a cash basis these belong to the year the money "
+              "arrived, not the")
+        print("   year the invoice was marked paid.")
+
     print(f"\n{RED}{BOLD}NOT COUNTED — no money found{OFF}")
     print("-" * 74)
     for invoice in result["unverified"]:

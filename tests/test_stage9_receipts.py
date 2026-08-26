@@ -247,3 +247,59 @@ def test_a_credit_used_in_a_split_cannot_be_reused(conn):
 
     assert len(result["matched"]) == 1
     assert len(result["unverified"]) == 1
+
+
+def test_money_that_arrived_in_another_year_is_named_as_such(conn):
+    """
+    An invoice dated 2025-11-11 was marked paid on 2026-02-01 in a batch
+    tidy-up, but the money arrived on 2025-11-19.
+
+    On a cash basis that is 2025 income. Reporting it as "no money found"
+    would be plainly wrong - the money is right there - and counting it in
+    2026 would put it in the wrong return.
+    """
+    add_invoice(conn, "in_1", "2026-02-01", 1508.75)
+    add_credit(conn, "wise_1", "2025-11-19", 1508.75)
+
+    result = receipts.reconcile(conn, 2026)
+
+    assert result["unverified"] == []
+    assert len(result["other_year"]) == 1
+    assert db.totals(conn, 2026)["income_usd"] == 0.00
+
+    row = conn.execute("SELECT * FROM income WHERE source_id = 'in_1'").fetchone()
+    assert "2025 income on a cash basis" in row["exclusion_reason"]
+
+
+def test_a_prior_year_credit_cannot_satisfy_the_same_year_test(conn):
+    """
+    2025-12-19 to 2026-02-01 is 44 days - inside the 45-day window. Without
+    a year check the credit would settle the invoice as ordinary 2026
+    income, quietly moving a payment into the wrong tax year.
+    """
+    add_invoice(conn, "in_1", "2026-02-01", 1300.50)
+    add_credit(conn, "wise_1", "2025-12-19", 1300.50)
+
+    result = receipts.reconcile(conn, 2026)
+
+    assert result["matched"] == []
+    assert len(result["other_year"]) == 1
+
+
+def test_a_stale_exclusion_reason_is_cleared_when_an_invoice_is_counted(conn):
+    """
+    An invoice can be excluded on one run and verified on the next. Leaving
+    the old reason behind gives a row that is counted but still says it was
+    not - unreadable, and impossible to trust.
+    """
+    add_invoice(conn, "in_1", "2026-04-16", 282.00)
+    conn.execute("UPDATE income SET excluded = 1, "
+                 "exclusion_reason = 'no money matching it' "
+                 "WHERE source_id = 'in_1'")
+    add_credit(conn, "wise_1", "2026-04-16", 282.00)
+
+    receipts.reconcile(conn, 2026)
+
+    row = conn.execute("SELECT * FROM income WHERE source_id = 'in_1'").fetchone()
+    assert row["excluded"] == 0
+    assert row["exclusion_reason"] is None
