@@ -56,9 +56,25 @@ payments matched to invoices by amount, currency and date.
 `amount_paid` always equals `amount_billed`, so gross receipts are what the
 client paid.
 
-**Unresolved:** HubSpot's own processing fee is not recoverable. The
-`COMMERCE_PAYMENT` object is not readable through the available connection.
-Those fees are deductible and are currently missing.
+**Processing fees — much smaller than they first looked.** The
+`COMMERCE_PAYMENT` object is not readable (`Insufficient scope:
+crm.objects.commercepayments.read`), so fee amounts cannot be pulled.
+
+But the payments export settles the size of the gap. Of 2026's payments:
+
+| | | |
+|---|---:|---|
+| Manually recorded | $15,656.75 | client paid directly — **no HubSpot fee** |
+| HubSpot Payments | $11,740.00 | fees apply |
+
+So fees are owed on $11,740, not on the full $29,945 invoiced. At card rates
+that is roughly $340 rather than the ~$870 a naive estimate would give.
+
+This also explains the $17,430 that never reached the business Wise account:
+those are the "manually recorded" payments — clients paying her personally.
+
+**A failed payment**, $90.00 on 2026-04-25 from Nima Karam, is correctly not
+counted as income.
 
 ### 3. Upwork — arrives as `PAYMENT ESCROW I`
 
