@@ -58,9 +58,30 @@ def main():
     else:
         print(f"\n{YELLOW}No HubSpot file at {hubspot_file}{OFF}")
 
+    # ---- HubSpot fees and refunds ----
+    payment_files = [f for f in sorted(glob.glob(str(config.IMPORTS_DIR / "*.csv")))
+                     if "payment" in Path(f).name.lower()
+                     and csv_import.is_payments_export(f)]
+    if payment_files:
+        newest = payment_files[-1]
+        result = csv_import.build_hubspot_payment_records(
+            csv_import.read_hubspot_payments(newest), year=args.year)
+        all_expenses += result["expenses"]
+        notes += result["notes"]
+        print(f"\n{BOLD}HUBSPOT FEES AND REFUNDS{OFF}  ({Path(newest).name})")
+        print(f"   USD {result['fees_total']:>12,.2f}  fees (deductible)")
+        print(f"   USD {result['refunds_total']:>12,.2f}  refunds "
+              f"(returns and allowances)")
+        older = [f for f in sorted(glob.glob(str(config.IMPORTS_DIR / "*payment*.csv")))
+                 if f not in payment_files]
+        if older:
+            print(f"   {YELLOW}{len(older)} earlier payments export(s) without "
+                  f"fee columns ignored.{OFF}")
+
     # ---- Upwork ----
     candidates = [f for f in sorted(glob.glob(str(config.IMPORTS_DIR / "*.csv")))
-                  if "hubspot" not in Path(f).name.lower()]
+                  if "hubspot" not in Path(f).name.lower()
+                  and "manual" not in Path(f).name.lower()]
     reports = [f for f in candidates if csv_import.is_transaction_report(f)]
     summaries = [f for f in candidates if f not in reports]
 

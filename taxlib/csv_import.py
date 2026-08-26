@@ -78,6 +78,100 @@ def build_hubspot_records(rows, year=None):
 
 
 # ===========================================================================
+#  HUBSPOT PAYMENTS EXPORT  -  fees and refunds only
+# ===========================================================================
+#
+# HubSpot offers two payment exports and only one is useful here. The plain
+# one has no fee columns at all; the "net" one adds Refunded amount,
+# Platform fee, Processing fees and Net amount.
+#
+# THIS IS NOT AN INCOME SOURCE. Income already comes from the invoices, and
+# importing both would count every payment twice - the mistake this project
+# has already made once with Stripe payouts and once with Upwork earnings.
+#
+# What it contributes is the two deductions the invoices cannot show:
+#
+#   fees     what HubSpot kept. Only charged on payments that actually went
+#            through HubSpot Payments - most of Hostlyft's were "Manually
+#            recorded", meaning the client paid directly and the invoice was
+#            marked paid afterwards. Those bore no fee.
+#   refunds  money given back. On Schedule C these are "returns and
+#            allowances" against gross receipts rather than an expense, so
+#            they are categorised separately to be reported that way.
+
+
+def is_payments_export(path):
+    """The useful export is the one with the fee columns."""
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        header = handle.readline()
+    return "Processing fees" in header and "Gross amount" in header
+
+
+def read_hubspot_payments(path):
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        return list(csv.DictReader(handle))
+
+
+def build_hubspot_payment_records(rows, year=None):
+    """Fees and refunds. Deliberately no income rows."""
+    expenses, notes = [], []
+    number = lambda row, key: float(row.get(key) or 0)
+
+    fees_total = refunds_total = 0.0
+    skipped_failed = 0
+
+    for row in rows:
+        date = (row.get("Payment date") or "")[:10]
+        if not date or (year and not date.startswith(str(year))):
+            continue
+        if (row.get("Status") or "").lower() == "failed":
+            skipped_failed += 1
+            continue
+
+        record = row.get("Record ID") or date
+        who = (row.get("Customer email") or "").strip() or None
+
+        fee = number(row, "Platform fee") + number(row, "Processing fees")
+        if fee:
+            fees_total += fee
+            expenses.append({
+                "source": "hubspot", "source_id": f"hubspot-fee:{record}",
+                "business": config.BUSINESS_HOSTLYFT, "date": date,
+                "amount": round(fee, 2), "currency": "USD",
+                "amount_usd": round(fee, 2),
+                "category": "payment processing", "vendor": "HubSpot",
+                "description": (f"HubSpot fee on a "
+                                f"{number(row, 'Gross amount'):,.2f} payment"),
+            })
+
+        refunded = number(row, "Refunded amount")
+        if refunded:
+            refunds_total += refunded
+            expenses.append({
+                "source": "hubspot", "source_id": f"hubspot-refund:{record}",
+                "business": config.BUSINESS_HOSTLYFT, "date": date,
+                "amount": round(refunded, 2), "currency": "USD",
+                "amount_usd": round(refunded, 2),
+                "category": "refunds to clients", "vendor": who,
+                "description": (f"Refund of {refunded:,.2f} against a "
+                                f"{number(row, 'Gross amount'):,.2f} payment "
+                                f"[{row.get('Status')}]"),
+            })
+
+    notes.append(f"HubSpot: ${fees_total:,.2f} of fees and ${refunds_total:,.2f} "
+                 f"of refunds, both deductible, from the payments export. "
+                 f"Fees are only charged on payments that went through "
+                 f"HubSpot Payments - the rest were paid to you directly.")
+    if skipped_failed:
+        notes.append(f"{skipped_failed} failed payment(s) skipped - not income "
+                     f"and no fee.")
+
+    return {"expenses": expenses, "notes": notes,
+            "fees_total": round(fees_total, 2),
+            "refunds_total": round(refunds_total, 2)}
+
+
+# ===========================================================================
 #  UPWORK
 # ===========================================================================
 #
