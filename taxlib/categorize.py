@@ -101,18 +101,41 @@ def merchant_from_card(description):
     # trim the noise card networks add: "Anthropic* Claude" -> "Anthropic",
     # "Clickup SAN DIEGO" -> "Clickup"
     name = re.split(r"[*#]", name)[0]
-    name = re.sub(r"\s+\d{4,}.*$", "", name)
     # Card networks append the merchant's town: "Clickup SAN DIEGO".
-    # Trim trailing ALL-CAPS words, but only when the name does not start
-    # in caps - otherwise "IBM" or "EDF" would be trimmed to nothing.
-    if name[:1].isupper() and not name.split()[0].isupper():
+    return _trim_noise(name) or None
+
+
+def _trim_noise(name):
+    """Strip the town and reference numbers card networks append."""
+    name = re.sub(r"\s+\d{4,}.*$", "", name or "").strip()
+    if name[:1].isupper() and name.split() and not name.split()[0].isupper():
         name = re.sub(r"(\s+[A-Z0-9.]{2,}){1,3}\s*$", "", name)
-    return name.strip() or None
+    return name.strip()
 
 
-def tidy_vendor(vendor, description):
-    """The best available name for whoever was paid."""
+def tidy_vendor(vendor, description, matched_word=None):
+    """
+    The best available name for whoever was paid.
+
+    Card descriptions often name a reseller before the real merchant:
+    "Dnh*Godaddy#4049716694" is GoDaddy, billed through DNH. Taking the part
+    before the asterisk gives "Dnh", which is right for "Anthropic* Claude"
+    and wrong here.
+
+    Where a rule matched, the segment containing that word is the better
+    name - the thing that made it recognisable is the thing to call it.
+    """
     merchant = merchant_from_card(description)
+    if merchant and matched_word:
+        raw = re.search(r"issued by\s+(.+?)\s*$", description or "",
+                        re.IGNORECASE)
+        if raw:
+            plain_word = config._plain(matched_word).lower()
+            for segment in re.split(r"[*]", raw.group(1)):
+                if plain_word in config._plain(segment).lower():
+                    cleaned = _trim_noise(re.split(r"[#]", segment)[0])
+                    if cleaned:
+                        return cleaned
     if merchant:
         return merchant
     if vendor and vendor.lower().startswith("card transaction"):
@@ -143,7 +166,9 @@ def recategorize(connection, tax_year=None, dry_run=False, rules=None):
     changed, still_unknown = [], []
 
     for row in rows:
-        vendor = tidy_vendor(row["vendor"], row["description"])
+        _, preview = categorize(row["description"], rules,
+                                merchant_from_card(row["description"]))
+        vendor = tidy_vendor(row["vendor"], row["description"], preview)
         if row["category"] != DEFAULT_CATEGORY:
             if vendor and vendor != row["vendor"] and not dry_run:
                 connection.execute(

@@ -116,6 +116,27 @@ CARD_REPAYMENTS = ["CAPITAL ONE", "CAPITALONE"]
 MATCH_WINDOW_DAYS = 45
 
 
+# Categories in rules.txt that are unambiguously a business cost. Travel and
+# taxes are excluded on purpose: a flight or a tax payment on a personal card
+# is far more likely to be personal, and guessing wrong means reading and
+# storing something private.
+PERSONAL_ALLOWED_CATEGORIES = {
+    "software", "phone and internet", "compliance and admin",
+    "professional services", "advertising", "payment processing",
+}
+
+
+def _business_subscription(description):
+    """(category, matched word) if this is a recognised business vendor."""
+    from taxlib import categorize
+
+    category, word = categorize.categorize(
+        description, vendor=categorize.merchant_from_card(description))
+    if category in PERSONAL_ALLOWED_CATEGORIES:
+        return category, word
+    return None, None
+
+
 def _contains(text, needles):
     low = (text or "").lower()
     return any(n.lower() in low for n in needles)
@@ -611,7 +632,74 @@ def build_records(connection, transactions, *, profile_label, business,
 
         # ---- outgoing ----
         if personal:
-            skipped_personal += 1      # never read, never stored
+            # NARROW EXTENSION, authorised explicitly: contractors are
+            # sometimes paid from the personal account, and those are real
+            # deductible business costs that are otherwise invisible.
+            #
+            # Only payments to somebody ON THE ROSTER are kept. Everything
+            # else - which is all ordinary personal spending - is discarded
+            # here, before it is stored, printed or logged. The test is a
+            # whitelist of named people, not a filter on categories, so
+            # nothing unrelated can slip through.
+            recipient = sender_of(description)
+            try:
+                person = config.match_contractor(recipient)
+            except config.AmbiguousContractor as clash:
+                person, ambiguous = None, str(clash)
+            else:
+                ambiguous = None
+
+            if person is None and ambiguous is None:
+                # Second whitelist: business subscriptions paid from the
+                # personal card, which happened before the Hostlyft account
+                # existed. Only vendors named in rules.txt under an
+                # unambiguously business category count - travel and taxes
+                # are deliberately left out, being too easily personal.
+                category, matched_word = _business_subscription(description)
+                if not category:
+                    skipped_personal += 1
+                    continue
+                from taxlib import categorize as _cat
+                expenses.append({
+                    "source": "wise", "source_id": source_id, "date": date,
+                    "amount": abs(amount), "currency": currency,
+                    "business": business,
+                    "amount_usd": abs(amount) if currency == "USD" else None,
+                    "category": category,
+                    "vendor": _cat.tidy_vendor(None, description, matched_word),
+                    "description": description[:200],
+                    "needs_review": True,
+                    "review_note": (f"business subscription paid from the "
+                                    f"personal card, matched on "
+                                    f"'{matched_word}' - confirm it was for "
+                                    f"Hostlyft and not personal use"),
+                })
+                continue
+
+            expenses.append({
+                "source": "wise", "source_id": source_id, "date": date,
+                "amount": abs(amount), "currency": currency,
+                "business": business,
+                "amount_usd": abs(amount) if currency == "USD" else None,
+                "category": db.CATEGORY_CONTRACTOR,
+                "vendor": person["name"] if person else recipient,
+                "description": description[:200],
+                "needs_review": bool(ambiguous),
+                "review_note": (ambiguous or
+                                f"paid from the personal account, not the "
+                                f"business one - confirm it was for Hostlyft "
+                                f"work"),
+            })
+            fee = (txn.get("totalFees") or {}).get("value") or 0
+            if fee:
+                expenses.append({
+                    "source": "wise", "source_id": f"{source_id}:fee",
+                    "date": date, "amount": abs(fee), "currency": currency,
+                    "business": business,
+                    "amount_usd": abs(fee) if currency == "USD" else None,
+                    "category": "bank fees", "vendor": "Wise",
+                    "description": "Wise transfer fee",
+                })
             continue
 
         decision = classify_debit(

@@ -282,3 +282,73 @@ def test_the_cloud_nine_work_is_tagged_marcus():
         "The Cloud Nine Team  Team") == config.BUSINESS_MARCUS
     assert csv_import.business_for_client(
         "Sand, Gravel, and Mulch LLC.") == config.BUSINESS_HOSTLYFT
+
+
+class TestPersonalAccountWhitelist:
+    """
+    The personal account is read narrowly. Outgoing payments are kept only
+    when they match a named contractor or a business vendor from rules.txt;
+    everything else is discarded before it is stored, printed or logged.
+
+    On the real account that means 4 matches out of 542 outgoing payments.
+    """
+
+    def test_only_business_categories_are_allowed_through(self):
+        from taxlib import wise_import
+        allowed = wise_import.PERSONAL_ALLOWED_CATEGORIES
+        assert "software" in allowed
+        assert "payment processing" in allowed
+        # travel and taxes are deliberately excluded: a flight or a tax
+        # payment on a personal card is far more likely to be personal, and
+        # guessing wrong means storing something private
+        assert "travel" not in allowed
+        assert "taxes and licences" not in allowed
+
+    def test_a_known_business_vendor_is_recognised(self):
+        from taxlib import wise_import
+        category, word = wise_import._business_subscription(
+            "Card transaction of 22.33 USD issued by Pricelabsinc*Dynaprice")
+        assert category == "software"
+        assert word == "PriceLabs"
+
+    def test_ordinary_personal_spending_is_not(self):
+        from taxlib import wise_import
+        for description in [
+            "Card transaction of 21.78 EUR issued by Shein",
+            "Card transaction of 25.50 EUR issued by Ubr* Pending",
+            "Card transaction of 88.23 USD issued by Amzn Mktp",
+            "Sent money to a friend",
+        ]:
+            category, _ = wise_import._business_subscription(description)
+            assert category is None, description
+
+
+class TestVendorNaming:
+    """
+    Card descriptions often name a reseller before the real merchant.
+    "Dnh*Godaddy#4049716694" is GoDaddy billed through DNH - and taking the
+    part before the asterisk gives "Dnh", which is right for
+    "Anthropic* Claude" and wrong here.
+    """
+
+    def test_the_segment_holding_the_matched_word_wins(self):
+        from taxlib import categorize
+        description = ("Card transaction of 12.99 GBP issued by "
+                       "Dnh*Godaddy#4049716694 207-979-2661")
+        merchant = categorize.merchant_from_card(description)
+        _, word = categorize.categorize(description, vendor=merchant)
+        assert categorize.tidy_vendor(None, description, word) == "Godaddy"
+
+    def test_the_town_and_reference_numbers_are_trimmed(self):
+        from taxlib import categorize
+        for description, expected in [
+            ("Card transaction of 24.00 USD issued by Anthropic ANTHROPIC.COM",
+             "Anthropic"),
+            ("Card transaction of 1.00 USD issued by Pricelabs Inc CHICAGO",
+             "Pricelabs Inc"),
+            ("Card transaction of 64.80 USD issued by Clickup SAN DIEGO",
+             "Clickup"),
+        ]:
+            merchant = categorize.merchant_from_card(description)
+            _, word = categorize.categorize(description, vendor=merchant)
+            assert categorize.tidy_vendor(None, description, word) == expected
