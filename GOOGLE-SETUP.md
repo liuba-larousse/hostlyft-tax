@@ -66,31 +66,62 @@ Drive access.
 
 ---
 
-## Step 3 — Set up the consent screen
+## Step 3 — Configure the Auth Platform
 
-This is the "an app wants access to your account" page you'll see in a moment.
+Google renamed and redesigned this in 2026. It used to be called the "OAuth
+consent screen"; it is now **Google Auth Platform**, and the steps are
+different from most guides you will find online.
 
-1. **APIs & Services** → **OAuth consent screen**
-2. User type: **Internal** → **Create**
-3. App name: `Hostlyft Tax Tracker`
-4. User support email and developer email: **team@hostlyft.com**
-5. **Save and Continue** through the rest, then **Back to Dashboard**
+If you see *"Google Auth Platform not configured yet"* with a dashed cloud, you
+are in the right place.
 
-> **Internal matters.** It means only people in your own Workspace can use it —
-> no Google review needed. It also avoids a trap: an **External** app left in
-> "Testing" mode expires its tokens after **7 days**, so the tool would silently
-> stop working a week later. If Internal isn't offered, tell me and we'll handle
-> the External case.
+1. Click the blue **Get started** button.
+
+2. **App Information**
+   - *App name:* `Hostlyft Tax Tracker`
+   - *User support email:* pick **team@hostlyft.com** from the dropdown
+   - **Next**
+
+3. **Audience** — the important one
+   - Choose **Internal**
+   - **Next**
+
+   > **Why Internal matters.** It means only people inside your own Workspace
+   > can use the app, so Google does not need to review it. It also avoids a
+   > trap: an **External** app sits in "Testing" mode, and testing-mode tokens
+   > **expire after 7 days** — the tool would silently stop working a week
+   > later.
+   >
+   > If **Internal** is greyed out, your account is not a Workspace
+   > organisation. Choose External and tell me — there is a extra step to stop
+   > the 7-day expiry.
+
+4. **Contact Information**
+   - *Email addresses:* `team@hostlyft.com`
+   - **Next**
+
+5. **Finish**
+   - Tick **I agree to the Google API Services: User Data Policy**
+   - **Continue**, then **Create**
+
+You land back on the Overview, now configured.
 
 ---
 
 ## Step 4 — Create the app registration
 
-1. **APIs & Services** → **Credentials**
-2. **+ Create Credentials** → **OAuth client ID**
-3. Application type: **Desktop app** ← must be Desktop, not Web
-4. Name: `Hostlyft Tax Tracker` → **Create**
-5. In the box that appears, **Download JSON**
+Still inside **Google Auth Platform**, in the left-hand menu:
+
+1. Click **Clients**
+2. **+ Create client**
+3. *Application type:* **Desktop app** ← must be Desktop, not Web
+4. *Name:* `Hostlyft Tax Tracker`
+5. **Create**
+6. A panel appears — click **Download JSON**
+
+> There is no "Data Access" step to do. The tool asks for the one permission it
+> needs at sign-in time, and because the app is Internal, Google does not
+> require the scope to be declared here first.
 
 ### Put it where the tool expects
 
@@ -149,7 +180,11 @@ Nothing is written to your sheet — this only reads.
 ## If something goes wrong
 
 **"is a WEB application client"** — you picked the wrong application type in
-step 4. Create another, choosing **Desktop app**.
+step 4. Go to **Clients**, delete it, and create another as **Desktop app**.
+
+**You can't find the "OAuth consent screen"** — it was renamed. It is now
+**Google Auth Platform**, and the Internal/External choice lives under
+**Audience**.
 
 **"The Google Sheets API is not switched on"** — step 2 was missed, or was done
 in a different project. Check the project dropdown says `hostlyft-tax`.
