@@ -90,6 +90,37 @@ def processor_for(lookup, amount, date):
     return None
 
 
+# A split payment is two or three transfers, not ten. Allowing more would
+# start finding coincidental combinations that happen to add up.
+MAX_SPLIT_PARTS = 3
+
+
+def _find_split(connection, amount, currency, low, high, used):
+    """
+    Two or three credits that together settle one invoice, exactly.
+
+    Only an EXACT total counts. A tolerance here would be dangerous in a way
+    it is not for a single payment: the more numbers you are allowed to add
+    together, the easier it is to hit any target by accident.
+    """
+    from itertools import combinations
+
+    rows = [row for row in connection.execute(
+        "SELECT * FROM income WHERE source = 'wise' "
+        "AND (excluded = 0 "
+        "     OR exclusion_reason LIKE '%paying an invoice already counted%' "
+        "     OR exclusion_reason LIKE '%part of a split payment%') "
+        "AND currency = ? AND date BETWEEN ? AND ? ORDER BY date",
+        (currency, low, high)).fetchall() if row["id"] not in used]
+
+    for size in range(2, MAX_SPLIT_PARTS + 1):
+        for group in combinations(rows, size):
+            if abs(sum(db.round_money(r["amount"]) for r in group)
+                   - amount) < 0.005:
+                return list(group)
+    return None
+
+
 def reconcile(connection, tax_year, dry_run=False):
     """
     Check every invoice against the money that arrived. Returns a summary.
@@ -154,10 +185,36 @@ def reconcile(connection, tax_year, dry_run=False):
         candidate = next((row for row in candidates
                           if row["id"] not in used_credits), None)
 
+        # A client can settle one invoice with TWO transfers - Settler pays
+        # half, then the rest weeks later, and the invoice is marked paid
+        # after the second. Looking for a single credit finds neither.
+        if candidate is None:
+            group = _find_split(connection, amount, currency, low, high,
+                                used_credits)
+            if group:
+                for row in group:
+                    used_credits.add(row["id"])
+                matched.append((invoice, group, 0.0))
+                if not dry_run:
+                    for row in group:
+                        connection.execute(
+                            "UPDATE income SET excluded = 1, "
+                            "exclusion_reason = ?, needs_review = 0, "
+                            "review_note = NULL, updated_at = ? WHERE id = ?",
+                            (f"part of a split payment settling invoice "
+                             f"{(invoice['description'] or '')[:40]} — "
+                             f"counted there in full, not here",
+                             db._now(), row["id"]))
+                    connection.execute(
+                        "UPDATE income SET excluded = 0, needs_review = 0, "
+                        "review_note = NULL, updated_at = ? WHERE id = ?",
+                        (db._now(), invoice["id"]))
+                continue
+
         if candidate is not None:
             used_credits.add(candidate["id"])
             difference = db.round_money(amount - candidate["amount"])
-            matched.append((invoice, candidate, difference))
+            matched.append((invoice, [candidate], difference))
             if not dry_run:
                 connection.execute(
                     "UPDATE income SET excluded = 1, exclusion_reason = ?, "

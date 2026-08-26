@@ -196,3 +196,54 @@ def test_an_invoice_flagged_by_an_earlier_run_is_un_flagged_once_verified(conn):
     assert row["excluded"] == 0
     assert row["exclusion_reason"] is None
     assert row["needs_review"] == 0
+
+
+def test_two_transfers_can_settle_one_invoice(conn):
+    """
+    A client pays half, then the rest weeks later, and the invoice is marked
+    paid after the second. Looking for a single credit finds neither, and
+    the whole invoice is reported as unpaid.
+    """
+    add_invoice(conn, "in_1", "2026-04-16", 1190.00)
+    add_credit(conn, "wise_1", "2026-03-11", 595.00)
+    add_credit(conn, "wise_2", "2026-04-14", 595.00)
+
+    result = receipts.reconcile(conn, 2026)
+
+    assert len(result["matched"]) == 1
+    invoice, credits, _ = result["matched"][0]
+    assert len(credits) == 2
+    assert db.totals(conn, 2026)["income_usd"] == 1190.00
+    for source_id in ("wise_1", "wise_2"):
+        row = conn.execute("SELECT * FROM income WHERE source_id = ?",
+                           (source_id,)).fetchone()
+        assert row["excluded"] == 1
+        assert "split payment" in row["exclusion_reason"]
+
+
+def test_a_split_must_add_up_exactly(conn):
+    """
+    No tolerance on a combination. The more numbers you may add together,
+    the easier it is to hit any target by accident - so a split that is
+    merely close is not a match.
+    """
+    add_invoice(conn, "in_1", "2026-04-16", 1190.00)
+    add_credit(conn, "wise_1", "2026-03-11", 588.89)
+    add_credit(conn, "wise_2", "2026-04-14", 588.89)   # 1,177.78, not 1,190
+
+    result = receipts.reconcile(conn, 2026)
+
+    assert result["matched"] == []
+    assert len(result["unverified"]) == 1
+
+
+def test_a_credit_used_in_a_split_cannot_be_reused(conn):
+    add_invoice(conn, "in_1", "2026-04-16", 1190.00)
+    add_invoice(conn, "in_2", "2026-04-17", 1190.00)
+    add_credit(conn, "wise_1", "2026-03-11", 595.00)
+    add_credit(conn, "wise_2", "2026-04-14", 595.00)
+
+    result = receipts.reconcile(conn, 2026)
+
+    assert len(result["matched"]) == 1
+    assert len(result["unverified"]) == 1

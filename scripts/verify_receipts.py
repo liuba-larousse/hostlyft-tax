@@ -41,11 +41,13 @@ def main():
 
     print(f"\n{BOLD}MATCHED TO A BANK CREDIT{OFF}")
     print("-" * 74)
-    for invoice, credit, difference in result["matched"]:
+    for invoice, credits, difference in result["matched"]:
         note = f"  (bank took {difference:,.2f})" if difference else ""
+        parts = " + ".join(f"{c['amount']:,.2f} on {c['date']}"
+                           for c in credits)
+        split = "  [split payment]" if len(credits) > 1 else ""
         print(f"   {invoice['date']}  {invoice['amount']:>9,.2f} "
-              f"{invoice['currency']}  <-  credit {credit['date']} "
-              f"{credit['amount']:,.2f}{note}")
+              f"{invoice['currency']}  <-  {parts}{note}{split}")
     if not result["matched"]:
         print("   none")
 

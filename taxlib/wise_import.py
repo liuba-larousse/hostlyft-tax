@@ -579,6 +579,20 @@ def build_records(connection, transactions, *, profile_label, business,
         reference = txn.get("referenceNumber") or txn.get("id") or ""
         source_id = f"{profile_label}:{reference}"
 
+        # Wise takes a fee out of an INCOMING transfer, so what is credited
+        # is less than what the client sent. The client sent the invoice
+        # amount; Wise kept a cut of it.
+        #
+        # Recording the credited figure would understate income AND lose the
+        # fee, which is deductible - the same netting trap as Stripe and
+        # Upwork. It also breaks matching: $1,689.25 invoiced shows up as
+        # $1,683.14 and looks like a different payment.
+        incoming_fee = 0.0
+        if txn.get("type") == "CREDIT":
+            incoming_fee = abs((txn.get("totalFees") or {}).get("value") or 0)
+            if incoming_fee:
+                amount = abs(amount) + incoming_fee
+
         if txn.get("type") == "CREDIT":
             decision = classify_credit(
                 connection, description=description, details_type=details_type,
@@ -614,6 +628,16 @@ def build_records(connection, transactions, *, profile_label, business,
                     "needs_review": bool(decision.get("needs_review")),
                     "review_note": decision["reason"] if decision.get("needs_review") else None,
                 })
+                if incoming_fee:
+                    expenses.append({
+                        "source": "wise", "source_id": f"{source_id}:infee",
+                        "date": date, "amount": incoming_fee,
+                        "currency": currency, "business": business,
+                        "amount_usd": (incoming_fee if currency == "USD"
+                                       else None),
+                        "category": "bank fees", "vendor": "Wise",
+                        "description": "Wise fee on an incoming transfer",
+                    })
             else:
                 # Recorded but excluded, so the decision stays auditable
                 # instead of the transaction silently vanishing.
