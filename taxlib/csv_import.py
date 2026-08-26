@@ -25,13 +25,87 @@ from taxlib import config
 #  HUBSPOT
 # ===========================================================================
 
+# Client email to the name used everywhere else. Built from HubSpot's own
+# contacts and companies, so it stays consistent with the accounting sheet
+# and with the Upwork mapping.
+HUBSPOT_CLIENT_EMAILS = {
+    "cody@hemlockhillscabinrentals.com": "Cody Hibbard",
+    "don-nima@hotmail.co.uk": "Nima Karam",
+    "michelleglohr@gmail.com": "Michelle Gilboa",
+    "jennifer@makegoal.com": "Jennifer Moraci",
+    "info@settler.homes": "Timur Khabirov",
+    "binethandgroup@ap.ramp.com": "Chananya Bineth",
+    "cb@21b.dev": "Chananya Bineth",
+    "alessio@failla.co.uk": "Alessio Failla",
+    "kohnalex76@gmail.com": "Alexandr Jaitner",
+    "tomek@oomph.apartments": "Tomasz Jagiello",
+    "tomasz.jerzy.jagiello@gmail.com": "Tomasz Jagiello",
+    "office@oomph.apartments": "Tomasz Jagiello",
+    "dorota.raczkiewicz@oomph.apartments": "Tomasz Jagiello",
+    "tyler@enjoyuniquestays.com": "Tyler Willey",
+    "accounting@enjoyuniquestays.com": "Tyler Willey",
+    "invoices@enjoyuniquestays.com": "Tyler Willey",
+    "shawn@airvevo.com": "Shawn Ye",
+    "lokanitours@gmail.com": "Brian Costley",
+    "marcus@thecloud9team.com": "Marcus Halawi",
+    "stephenpnewall@gmail.com": "Stephen Newall",
+    "apnewall@mac.com": "Andrew Newall",
+}
+
+
+def client_lookup_from_payments(payment_rows):
+    """
+    Build {(amount, date): client name} from the payments export.
+
+    The invoice file has no customer column, so 48 income rows had no client
+    against them. The payments export does carry the email, and the two agree
+    on amount and date - so one can name the other.
+    """
+    exact, by_amount = {}, {}
+    for row in payment_rows:
+        email = (row.get("Customer email") or "").strip().lower()
+        date = (row.get("Payment date") or "")[:10]
+        try:
+            amount = round(float(row.get("Gross amount") or 0), 2)
+        except ValueError:
+            continue
+        if not (email and date and amount):
+            continue
+        who = HUBSPOT_CLIENT_EMAILS.get(email, email)
+        exact[(amount, date)] = who
+        # a second index on amount alone, for the many invoices whose
+        # recorded payment date is a batch reconciliation rather than the
+        # day the money moved
+        by_amount.setdefault(amount, set()).add(who)
+
+    # only usable where one client ever paid that exact figure
+    unique = {amount: next(iter(people))
+              for amount, people in by_amount.items() if len(people) == 1}
+    return {"exact": exact, "unique_amount": unique}
+
+
+def name_for(clients, amount, date):
+    """
+    Who paid this. Exact amount and date first, then amount alone - but only
+    where a single client ever paid that figure, so a shared round number
+    like 90.00 is never attributed to the wrong person.
+    """
+    if not clients:
+        return None
+    amount = round(float(amount), 2)
+    found = clients.get("exact", {}).get((amount, date))
+    if found:
+        return found
+    return clients.get("unique_amount", {}).get(amount)
+
+
 def read_hubspot(path):
     """Read the extracted invoice file, ignoring its comment header."""
     with open(path, newline="", encoding="utf-8-sig") as handle:
         return list(csv.DictReader(r for r in handle if not r.startswith("#")))
 
 
-def build_hubspot_records(rows, year=None):
+def build_hubspot_records(rows, year=None, clients=None):
     """
     One income row per PAID invoice, at the amount the client actually paid.
 
@@ -41,6 +115,8 @@ def build_hubspot_records(rows, year=None):
     `subtotal` differing from `amount_paid` is a DISCOUNT given, not a fee.
     """
     income, outstanding, notes = [], [], []
+    clients = clients or {}
+    named = unnamed = 0
 
     for row in rows:
         invoice = row["invoice"]
@@ -60,8 +136,15 @@ def build_hubspot_records(rows, year=None):
             continue
 
         discount = round(subtotal - paid, 2)
+        who = name_for(clients, paid, date)
+        if who:
+            named += 1
+        else:
+            unnamed += 1
+
         income.append({
             "source": "hubspot", "source_id": f"hubspot:{invoice}",
+            "payer": who,
             "business": config.BUSINESS_HOSTLYFT,
             "date": date, "amount": paid, "currency": currency,
             "amount_usd": paid if currency == "USD" else None,
@@ -70,6 +153,9 @@ def build_hubspot_records(rows, year=None):
                                if discount > 0 else "")),
         })
 
+    if clients:
+        notes.append(f"Client names: {named} invoices matched to a payment, "
+                     f"{unnamed} could not be named.")
     notes.append(
         "HubSpot's processing fees are NOT in this file - the payment records "
         "holding them were not readable. Those fees are deductible and are "

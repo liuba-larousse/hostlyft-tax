@@ -58,6 +58,22 @@ SCHEDULE_C = {
 }
 
 
+# Self-employment tax: 15.3% on 92.35% of net profit.
+#
+# US income tax is expected to be $0 - the Foreign Earned Income Exclusion
+# covers everything up to $132,900 and net profit is well below that - so
+# self-employment tax is effectively the whole bill.
+#
+# An ESTIMATE. Stage 9 verifies every figure against the IRS PDF before
+# anything here should be relied on.
+SE_TAX_RATE = 0.153
+SE_TAXABLE_SHARE = 0.9235
+
+
+def se_tax(net_profit):
+    return round(max(0.0, net_profit) * SE_TAXABLE_SHARE * SE_TAX_RATE, 2)
+
+
 def money(value):
     return round(float(value or 0), 2)
 
@@ -187,6 +203,34 @@ def summary_tab(data, year, built_on):
     tab.note("Only withdrawals count toward the $600 that triggers a 1099.")
     tab.blank()
 
+    tab.section("WHAT THE JARS WILL DO TO YOUR TAX")
+    in_jars = sum(data["jar_totals"].values())
+    contractor_now = sum(info["withdrawn_usd"]
+                         for info in data["contractors"].values())
+    net_now = t["net_profit_usd"]
+    net_after = money(net_now - in_jars)
+
+    tab.head("", "Contractor cost", "Net profit", "Est. self-employment tax")
+    tab.row("As things stand today", money(contractor_now), money(net_now),
+            se_tax(net_now))
+    tab.row("Once the jars are withdrawn",
+            money(contractor_now + in_jars), net_after, se_tax(net_after))
+    tab.total("Difference", money(in_jars), money(-in_jars),
+              money(se_tax(net_after) - se_tax(net_now)))
+    tab.note(f"${money(in_jars):,.2f} is sitting in contractor jars. It is "
+             f"not deductible until it leaves — but it will leave, so the "
+             f"second row is the more realistic picture.")
+    tab.note("Estimated self-employment tax only: 15.3% on 92.35% of net "
+             "profit. US income tax is expected to be $0, because the "
+             "Foreign Earned Income Exclusion covers everything up to "
+             "$132,900 and net profit is well below that.")
+    tab.warn("An estimate. Stage 9 verifies every figure against the IRS "
+             "publication before this should be relied on.")
+    tab.note("Money still in jars on 31 December does NOT get this "
+             "deduction — it lands in next year instead. Target: jars empty "
+             "by about 20 December.")
+    tab.blank()
+
     tab.section("WORTH KNOWING")
     tab.row("Excluded as internal transfers", t["excluded_income_count"],
             "same money arriving twice — see the Excluded tab")
@@ -265,12 +309,26 @@ def month_tabs(connection, data, year):
                  "estimate of the deduction still to come.")
         tab.blank()
 
-        tab.section("NET FOR THE MONTH")
+        tab.section("THE MONTH'S TOTALS")
         income_total = sum(r["amount_usd"] or 0 for r in income)
         expense_total = sum(r["amount_usd"] or 0 for r in expenses)
+        still_in_jars = money(sum(
+            allocations.get((month, p["name"]), {"in": 0.0})["in"]
+            - allocations.get((month, p["name"]), {"out": 0.0})["out"]
+            for p in config.CONTRACTORS))
+
         tab.head("", "", "", "", "Income", "Expenses", "Net")
-        tab.total("", "", "", "", money(income_total), money(expense_total),
-                  money(income_total - expense_total))
+        tab.row("Cash basis — what has actually moved", "", "", "",
+                money(income_total), money(expense_total),
+                money(income_total - expense_total))
+        tab.row("Set aside into jars this month", "", "", "", "",
+                still_in_jars, money(-still_in_jars))
+        tab.total("PROJECTED once the jars are withdrawn", "", "", "",
+                  money(income_total), money(expense_total + still_in_jars),
+                  money(income_total - expense_total - still_in_jars))
+        tab.note("The cash-basis row is what you would file if the year ended "
+                 "today. The projected row assumes the team withdraw what is "
+                 "set aside for them, which they do before year end.")
 
         tabs[name] = tab
     return tabs

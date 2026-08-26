@@ -41,8 +41,16 @@ def main():
     # ---- HubSpot ----
     hubspot_file = config.IMPORTS_DIR / "hubspot_invoices_2026.csv"
     if hubspot_file.exists():
+        # the payments export carries the customer on each payment, which is
+        # the only place the invoice's client can be found
+        client_lookup = {}
+        for candidate in sorted(glob.glob(str(config.IMPORTS_DIR / "*payment*.csv"))):
+            if csv_import.is_payments_export(candidate):
+                client_lookup = csv_import.client_lookup_from_payments(
+                    csv_import.read_hubspot_payments(candidate))
         result = csv_import.build_hubspot_records(
-            csv_import.read_hubspot(hubspot_file), year=args.year)
+            csv_import.read_hubspot(hubspot_file), year=args.year,
+            clients=client_lookup)
         all_income += result["income"]
         notes += result["notes"]
         by_currency = {}
