@@ -106,8 +106,14 @@ CLIENT_SENDERS = {
 # repayment as well would double them.
 CARD_REPAYMENTS = ["CAPITAL ONE", "CAPITALONE"]
 
-# How close in time a payout has to be to the income it came from.
-MATCH_WINDOW_DAYS = 10
+# How close in time a bank credit has to be to the income it settles.
+#
+# 45 days, not 10. Several HubSpot invoices carry a payment date of
+# 2026-02-01 - a batch marked paid in one go, weeks after the money actually
+# arrived. A 10-day window missed all of them, so Monichkirchnerhof's
+# EUR 1,195, Settler's $1,326 and Unique Stays' $300 were each counted twice:
+# once from the invoice, once from the bank credit that paid it.
+MATCH_WINDOW_DAYS = 45
 
 
 def _contains(text, needles):
@@ -170,16 +176,61 @@ def find_already_counted(connection, amount, currency, date,
     if payout:
         return payout, "stripe_payout"
 
-    income = connection.execute(
+    candidates = connection.execute(
         "SELECT * FROM income WHERE currency = ? AND amount = ? "
         "AND excluded = 0 AND date BETWEEN ? AND ? "
-        "AND (source_id IS NULL OR source_id != ?)",
+        "AND (source_id IS NULL OR source_id != ?) "
+        "AND source != 'wise'",
         (currency.upper(), amount, low, high,
-         ignore_source_id or "")).fetchone()
-    if income:
-        return income, "invoice"
+         ignore_source_id or "")).fetchall()
 
-    return None, None
+    if not candidates:
+        return None, None
+
+    # With a window this wide a recurring client can have two invoices of the
+    # same amount in range. Take the nearest in time - but say so, because
+    # picking between two identical figures is a guess even when it is the
+    # best one available.
+    if len(candidates) == 1:
+        return candidates[0], "invoice"
+
+    nearest = min(candidates,
+                  key=lambda row: abs((dt.date.fromisoformat(row["date"])
+                                       - day).days))
+    return nearest, "invoice (one of several the same size)"
+
+
+# A credit within this much of an invoice is probably the same money, minus
+# a wire fee - but "probably" is not good enough to exclude income on.
+NEAR_MISS_TOLERANCE = 0.03
+
+
+def find_near_miss(connection, amount, currency, date,
+                   window=MATCH_WINDOW_DAYS, ignore_source_id=None):
+    """
+    An invoice that is CLOSE to this credit but not equal to it.
+
+    A client wires an invoice and their bank takes a fee, so $1,689.25
+    invoiced arrives as $1,683.14. Excluding it would silently drop real
+    income; counting it doubles the invoice. Neither can be chosen safely
+    from the numbers alone.
+
+    So this finds the candidate and the caller flags it for a human. Counted,
+    but visibly uncertain - which is the honest position.
+    """
+    day = dt.date.fromisoformat(date)
+    low = (day - dt.timedelta(days=window)).isoformat()
+    high = (day + dt.timedelta(days=window)).isoformat()
+    span = amount * NEAR_MISS_TOLERANCE
+
+    return connection.execute(
+        "SELECT * FROM income WHERE currency = ? AND excluded = 0 "
+        "AND amount BETWEEN ? AND ? AND amount != ? "
+        "AND date BETWEEN ? AND ? "
+        "AND (source_id IS NULL OR source_id != ?) AND source != 'wise' "
+        "ORDER BY ABS(amount - ?) LIMIT 1",
+        (currency.upper(), amount - span, amount + span, db.round_money(amount),
+         low, high, ignore_source_id or "", amount)).fetchone()
 
 
 # ===========================================================================
@@ -285,6 +336,22 @@ def classify_credit(connection, *, description, details_type, amount,
                         "matched": how,
                         "reason": (f"{client} paying an invoice already "
                                    f"counted - direct payment, not new income")}
+            near = find_near_miss(connection, amount, currency, date,
+                                  ignore_source_id=source_id)
+            if near is not None:
+                difference = abs(db.round_money(near["amount"]) - amount)
+                return {
+                    "kind": "income", "client": client, "business": business,
+                    "needs_review": True,
+                    "reason": (f"payment from {client}, counted as income - "
+                               f"but it is within {difference:,.2f} "
+                               f"{currency} of an invoice already counted "
+                               f"({near['amount']:,.2f} on {near['date']}). "
+                               f"If it is the same money arriving after a "
+                               f"wire fee, this is a duplicate; if it is a "
+                               f"separate payment, it is correct. Not "
+                               f"guessed either way."),
+                }
             return {"kind": "income", "client": client, "business": business,
                     "reason": f"payment from {client}"}
 
@@ -458,13 +525,25 @@ def fetch_statement(token, profile_id, balance_id, currency, start, end,
 # ===========================================================================
 
 def build_records(connection, transactions, *, profile_label, business,
-                  personal=False):
+                  personal=False, balance_kind="STANDARD"):
     """
     Turn one balance's transactions into rows for the database.
 
     `personal=True` applies the narrow rule for the personal account:
     outgoing payments are dropped without being examined, and only incoming
     money from senders known to be business is kept.
+
+    `balance_kind` decides whether jar movements are recorded here.
+
+    EVERY JAR MOVEMENT APPEARS TWICE - once on the operating balance and once
+    on the jar itself - and the two describe it differently:
+
+        from the operating balance   "Moved 1,172.00 USD to Ayoka"
+        from Ayoka's jar             "Moved 1,172.00 USD to USD"
+
+    Only the first names the jar. So movements are recorded from STANDARD
+    balances only. Reading both would double every allocation and label half
+    of them with a currency code.
     """
     income, expenses, jars, notes = [], [], [], []
     skipped_personal = 0
@@ -491,7 +570,17 @@ def build_records(connection, transactions, *, profile_label, business,
                 continue
 
             if decision["kind"] == "jar_move":
-                continue          # the jar's own balance is read separately
+                if balance_kind != "STANDARD":
+                    continue      # the same movement, seen from the jar side
+                jars.append({
+                    "source_id": source_id, "date": date,
+                    "jar_name": decision.get("jar") or "(unnamed)",
+                    "direction": "out",     # money coming BACK out of the jar
+                    "amount": abs(amount), "currency": currency,
+                    "amount_usd": abs(amount) if currency == "USD" else None,
+                    "description": description[:200],
+                })
+                continue
 
             if decision["kind"] == "income":
                 income.append({
@@ -530,6 +619,16 @@ def build_records(connection, transactions, *, profile_label, business,
             amount=abs(amount), currency=currency, date=date)
 
         if decision["kind"] == "jar_move":
+            if balance_kind != "STANDARD":
+                continue          # the same movement, seen from the jar side
+            jars.append({
+                "source_id": source_id, "date": date,
+                "jar_name": decision.get("jar") or "(unnamed)",
+                "direction": "in",          # money set aside INTO the jar
+                "amount": abs(amount), "currency": currency,
+                "amount_usd": abs(amount) if currency == "USD" else None,
+                "description": description[:200],
+            })
             continue
         if decision["kind"] == "not_expense":
             expenses.append({
@@ -580,6 +679,11 @@ def build_records(connection, transactions, *, profile_label, business,
     if skipped_personal:
         notes.append(f"{skipped_personal} personal transactions in "
                      f"{profile_label} were skipped without being stored")
+
+    # attach a person to each jar movement where the name is recognised
+    for movement in jars:
+        person = config.match_contractor(movement["jar_name"], strict=False)
+        movement["person"] = person["name"] if person else None
 
     return {"income": income, "expenses": expenses, "jars": jars,
             "notes": notes}

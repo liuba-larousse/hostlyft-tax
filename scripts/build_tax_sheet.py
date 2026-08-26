@@ -41,13 +41,14 @@ def main():
     print("Your accounting sheet is never written to.")
 
     connection = db.connect()
-    tabs, data = tax_sheet.build_tabs(connection, args.year, built_on)
+    tabs, data = tax_sheet.build_all(connection, args.year, built_on)
+    tabs = {name: tabs[name] for name in tax_sheet.tab_order(tabs)}
 
     print()
     print(f"{BOLD}WHAT WOULD BE WRITTEN{OFF}")
     print("-" * 74)
     for name, rows in tabs.items():
-        print(f"   {name:<12} {len(rows):>4} rows")
+        print(f"   {name:<12} {len(rows.rows):>4} rows")
 
     t = data["totals"]
     print()
@@ -66,7 +67,7 @@ def main():
         print()
         print(f"{BOLD}Summary tab preview{OFF}")
         print("-" * 74)
-        for row in tabs["Summary"][:20]:
+        for row in tabs["Summary"].rows[:20]:
             print("   " + " | ".join(str(c) for c in row)[:88])
         print()
         print("=" * 74)

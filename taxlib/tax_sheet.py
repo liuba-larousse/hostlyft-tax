@@ -35,6 +35,7 @@ WHY EVERY ROW CARRIES ITS SOURCE ID
 import datetime as dt
 
 from taxlib import config, db, gsheets
+from taxlib.sheet_style import Tab, format_requests
 
 
 TITLE = "Hostlyft_Tax_{year}"
@@ -133,178 +134,254 @@ def collect(connection, year):
 #  LAYING OUT THE TABS
 # ===========================================================================
 
-def summary_rows(data, year, built_on):
+MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+               "July", "August", "September", "October", "November",
+               "December"]
+
+
+def summary_tab(data, year, built_on):
+    tab = Tab(money_columns=[1, 2, 3])
     t, h, m = data["totals"], data["hostlyft"], data["marcus"]
-    rows = [
-        [f"Hostlyft — Tax Summary {year}"],
-        ["Cash received basis: what actually arrived, in the month it arrived."],
-        [f"Built from the tax database on {built_on}. Do not edit — it is "
-         f"rewritten on every run."],
-        [],
-        ["", "Income USD", "Expenses USD", "Net profit USD"],
-        ["Hostlyft LLC", money(h["income_usd"]), money(h["expenses_usd"]),
-         money(h["net_profit_usd"])],
-        ["Marcus (separate work)", money(m["income_usd"]),
-         money(m["expenses_usd"]), money(m["net_profit_usd"])],
-        ["COMBINED — what tax is worked out on", money(t["income_usd"]),
-         money(t["expenses_usd"]), money(t["net_profit_usd"])],
-        [],
-        ["Why combined: a single-member LLC is a disregarded entity, so both "
-         "land on the same 1040."],
-        ["Self-employment tax is charged on combined net earnings, and the "
-         "FEIE and Social Security caps are combined limits too."],
-        [],
-        ["EXPENSES BY SCHEDULE C LINE"],
-        ["Category", "Schedule C line", "Entries", "USD"],
-    ]
+
+    tab.title(f"Hostlyft — Tax Summary {year}")
+    tab.note("Cash received basis: what actually arrived, in the month it "
+             "arrived. This is what tax is worked out on.")
+    tab.note(f"Built from the tax database on {built_on}. Rewritten on every "
+             "run — don't type into it.")
+    tab.blank()
+
+    tab.section("THE BOTTOM LINE")
+    tab.head("", "Income USD", "Expenses USD", "Net profit USD")
+    tab.row("Hostlyft LLC", money(h["income_usd"]), money(h["expenses_usd"]),
+            money(h["net_profit_usd"]))
+    tab.row("Marcus (separate work)", money(m["income_usd"]),
+            money(m["expenses_usd"]), money(m["net_profit_usd"]))
+    tab.total("COMBINED — tax is worked out on this", money(t["income_usd"]),
+              money(t["expenses_usd"]), money(t["net_profit_usd"]))
+    tab.note("A single-member LLC is a disregarded entity, so both land on "
+             "the same 1040. Self-employment tax is charged on the combined "
+             "figure, and the FEIE and Social Security caps are combined too.")
+    tab.blank()
+
+    tab.section("EXPENSES BY SCHEDULE C LINE")
+    tab.head("Category", "Schedule C line", "Entries", "USD")
     for row in data["by_category"]:
-        rows.append([row["category"],
-                     SCHEDULE_C.get(row["category"], "review"),
-                     row["n"], money(row["total"])])
-    rows += [
-        [],
-        ["MONEY DELIBERATELY NOT COUNTED"],
-        ["Entries", t["excluded_income_count"],
-         "internal transfers — see the Excluded tab for each reason"],
-        ["Flagged for review", t["needs_review_count"],
-         "see the Review tab"],
-        ["Not yet in USD", (t["unconverted_income_count"]
-                            + t["unconverted_expense_count"]),
-         "counted as $0 above if any"],
-        [],
-        ["CONTRACTOR WITHDRAWALS — what was actually paid out"],
-        ["Person", "Withdrawn USD", "Payments", "Form", "1099 needed?"],
-    ]
+        cells = [row["category"], SCHEDULE_C.get(row["category"], "review"),
+                 row["n"], money(row["total"])]
+        (tab.warn if row["category"] == "uncategorized" else tab.row)(*cells)
+    tab.total("TOTAL", "", "", money(t["expenses_usd"]))
+    tab.blank()
+
+    tab.section("CONTRACTORS — deduction now, and what is still to come")
+    tab.head("Person", "Withdrawn so far", "Still in their jar",
+             "Expected total", "Form", "1099?")
     for name, info in data["contractors"].items():
-        rows.append([name, money(info["withdrawn_usd"]), info["withdrawals"],
-                     info["form"], "YES" if info["needs_1099"] else "no"])
-    rows += [
-        [],
-        ["Withdrawals only. Money sitting in a jar has not been paid to "
-         "anyone — it is still yours, is not deductible, and does not count "
-         "toward $600."],
-    ]
-    return rows
+        in_jar = data["jar_totals"].get(name, 0.0)
+        cells = [name, money(info["withdrawn_usd"]), money(in_jar),
+                 money(info["withdrawn_usd"] + in_jar), info["form"],
+                 "YES" if info["needs_1099"] else "no"]
+        (tab.warn if info["needs_1099"] else tab.row)(*cells)
+    tab.note("Withdrawn is deductible NOW. Money still in a jar is not — it "
+             "is yours until it leaves. It becomes deductible when they "
+             "withdraw it, which is what the Expected column shows.")
+    tab.note("Only withdrawals count toward the $600 that triggers a 1099.")
+    tab.blank()
+
+    tab.section("WORTH KNOWING")
+    tab.row("Excluded as internal transfers", t["excluded_income_count"],
+            "same money arriving twice — see the Excluded tab")
+    tab.row("Flagged for review", t["needs_review_count"], "see the Review tab")
+    tab.row("Not yet converted to USD",
+            t["unconverted_income_count"] + t["unconverted_expense_count"],
+            "counted as $0 above if any")
+    return tab
 
 
-def month_rows(data):
-    rows = [["Cash received and spent, by month"],
-            ["The month the money moved, not the month the work was done."],
-            [],
-            ["Month", "Income USD", "Expenses USD", "Net USD"]]
-    for row in data["by_month"]:
-        rows.append([row["month"], money(row["income"]), money(row["expenses"]),
-                     money((row["income"] or 0) - (row["expenses"] or 0))])
-    return rows
+def month_tabs(connection, data, year):
+    """One tab per month that has activity."""
+    allocations = {}
+    for row in db.jar_allocations_by_month(connection, year):
+        allocations[(row["month"], row["person"])] = {
+            "in": money(row["allocated"]), "out": money(row["returned"])}
+    withdrawals = db.contractor_withdrawals_by_month(connection, year)
+
+    months = sorted({r["date"][:7] for r in data["income"]}
+                    | {r["date"][:7] for r in data["expenses"]})
+
+    tabs = {}
+    for month in months:
+        name = f"{MONTH_NAMES[int(month[5:7]) - 1][:3]} {month[:4]}"
+        tab = Tab(money_columns=[1, 2, 3, 4, 5, 6])
+        tab.title(f"Hostlyft — Tax: {MONTH_NAMES[int(month[5:7]) - 1]} "
+                  f"{month[:4]}")
+        tab.note("Cash received basis — money that actually moved this month, "
+                 "whenever the work was done.")
+        tab.blank()
+
+        income = [r for r in data["income"] if r["date"].startswith(month)]
+        tab.section("INCOME RECEIVED")
+        tab.head("Date", "Source", "Client", "Business", "Amount", "Currency",
+                 "USD")
+        for r in income:
+            tab.row(r["date"], r["source"], r["payer"] or "", r["business"],
+                    money(r["amount"]), r["currency"], money(r["amount_usd"]))
+        tab.total("TOTAL INCOME", "", "", "", "", "",
+                  money(sum(r["amount_usd"] or 0 for r in income)))
+        tab.blank()
+
+        expenses = [r for r in data["expenses"] if r["date"].startswith(month)]
+        tab.section("EXPENSES PAID")
+        tab.head("Date", "Vendor", "Category", "Schedule C", "Amount",
+                 "Currency", "USD")
+        for r in expenses:
+            tab.row(r["date"], r["vendor"] or "", r["category"],
+                    SCHEDULE_C.get(r["category"], "review"),
+                    money(r["amount"]), r["currency"], money(r["amount_usd"]))
+        tab.total("TOTAL EXPENSES", "", "", "", "", "",
+                  money(sum(r["amount_usd"] or 0 for r in expenses)))
+        tab.blank()
+
+        tab.section("CONTRACTORS THIS MONTH")
+        tab.head("Person", "Set aside into jar", "Taken back out",
+                 "Actually withdrawn", "Deductible now",
+                 "Expected once withdrawn")
+        any_activity = False
+        for person in config.CONTRACTORS:
+            name_ = person["name"]
+            moved = allocations.get((month, name_), {"in": 0.0, "out": 0.0})
+            withdrawn = withdrawals.get((month, name_), 0.0)
+            if not (moved["in"] or moved["out"] or withdrawn):
+                continue
+            any_activity = True
+            net_allocated = money(moved["in"] - moved["out"])
+            tab.row(name_, moved["in"], moved["out"], withdrawn,
+                    withdrawn, net_allocated)
+        if not any_activity:
+            tab.row("no contractor activity this month")
+        tab.note("Set aside into a jar is NOT a deduction — it is still your "
+                 "money, sitting in your own account under a label.")
+        tab.note("It becomes deductible when they withdraw it. Since the team "
+                 "withdraw before year end, the last column is the best "
+                 "estimate of the deduction still to come.")
+        tab.blank()
+
+        tab.section("NET FOR THE MONTH")
+        income_total = sum(r["amount_usd"] or 0 for r in income)
+        expense_total = sum(r["amount_usd"] or 0 for r in expenses)
+        tab.head("", "", "", "", "Income", "Expenses", "Net")
+        tab.total("", "", "", "", money(income_total), money(expense_total),
+                  money(income_total - expense_total))
+
+        tabs[name] = tab
+    return tabs
 
 
-def income_rows(data):
-    rows = [["Every receipt, at GROSS"],
-            ["Gross is what the client paid. Platform fees are separate "
-             "expenses — netting them here would lose the deduction."],
-            [],
-            ["Date", "Source", "Business", "Client", "Amount", "Currency",
-             "USD", "FX rate", "Rate from", "Review?", "Source ID",
-             "Description"]]
-    for r in data["income"]:
-        rows.append([r["date"], r["source"], r["business"], r["payer"] or "",
-                     money(r["amount"]), r["currency"], money(r["amount_usd"]),
-                     r["fx_rate"] or "", r["fx_date"] or "",
-                     "yes" if r["needs_review"] else "",
-                     r["source_id"], (r["description"] or "")[:120]])
-    return rows
+def simple_tab(title, notes, headers, rows, money_columns, empty_message=None):
+    tab = Tab(money_columns=money_columns)
+    tab.title(title)
+    for note in notes:
+        tab.note(note)
+    tab.blank()
+    tab.head(*headers)
+    for row in rows:
+        tab.row(*row)
+    if not rows and empty_message:
+        tab.row(empty_message)
+    return tab
 
 
-def expense_rows(data):
-    rows = [["Every cost"],
-            [],
-            ["Date", "Source", "Business", "Vendor", "Category",
-             "Schedule C line", "Amount", "Currency", "USD", "FX rate",
-             "Rate from", "Review?", "Source ID"]]
-    for r in data["expenses"]:
-        rows.append([r["date"], r["source"], r["business"], r["vendor"] or "",
-                     r["category"], SCHEDULE_C.get(r["category"], "review"),
-                     money(r["amount"]), r["currency"], money(r["amount_usd"]),
-                     r["fx_rate"] or "", r["fx_date"] or "",
-                     "yes" if r["needs_review"] else "", r["source_id"]])
-    return rows
-
-
-def excluded_rows(data):
-    rows = [["Money deliberately NOT counted"],
-            ["Each of these is the same money arriving twice — a payout of "
-             "income already counted, or a transfer between your own "
-             "accounts. Kept visible so the decision can be checked."],
-            [],
-            ["Date", "Kind", "Source", "Who", "Amount", "Currency", "USD",
-             "Why it was excluded"]]
-    for r in data["excluded"]:
-        rows.append([r["date"], r["kind"], r["source"], r["who"] or "",
-                     money(r["amount"]), r["currency"], money(r["amount_usd"]),
-                     r["exclusion_reason"] or ""])
-    return rows
-
-
-def jar_rows(data, connection):
-    total = db.total_in_jars_usd(connection)
-    rows = [["Wise jars — money set aside, still yours"],
-            ["A jar is a labelled pot inside your own account. Putting money "
-             "in it pays nobody."],
-            ["It is NOT deductible, does NOT count toward $600, and DOES "
-             "count toward the FBAR $10,000 test."],
-            [],
-            ["Jar", "Person", "Amount", "Currency", "USD", "Read on"]]
-    for r in data["jars"]:
-        rows.append([r["jar_name"], r["person"] or "", money(r["amount"]),
-                     r["currency"], money(r["amount_usd"]), r["observed_on"]])
-    rows += [
-        [],
-        ["TOTAL IN JARS", "", "", "", money(total)],
-        [],
-        ["Money still in jars on 31 December is not deductible that year but "
-         "still inflates taxable profit."],
-        [f"At 15.3% self-employment tax, the ${money(total):,.2f} above would "
-         f"cost about ${money(total * 0.9235 * 0.153):,.2f} in real tax if it "
-         f"were still there at year end."],
-        ["Target: jars empty by about 20 December."],
-    ]
-    return rows
-
-
-def review_rows(data):
-    rows = [["Everything flagged for a human"],
-            ["Nothing here is wrong. These are the things the importer would "
-             "not decide on its own."],
-            [],
-            ["Date", "Kind", "Amount", "Currency", "Who", "Why"]]
-    for r in data["review"]:
-        rows.append([r["date"], r["kind"], money(r["amount"]), r["currency"],
-                     r["who"] or "", (r["review_note"] or "")[:200]])
-    if len(rows) == 4:
-        rows.append(["", "", "", "", "", "nothing needs attention"])
-    return rows
-
-
-TABS = ["Summary", "By month", "Income", "Expenses", "Excluded", "Jars",
-        "Review"]
-
-
-def build_tabs(connection, year, built_on):
+def build_all(connection, year, built_on):
     data = collect(connection, year)
-    return {
-        "Summary": summary_rows(data, year, built_on),
-        "By month": month_rows(data),
-        "Income": income_rows(data),
-        "Expenses": expense_rows(data),
-        "Excluded": excluded_rows(data),
-        "Jars": jar_rows(data, connection),
-        "Review": review_rows(data),
-    }, data
+
+    # what is still sitting in each person's jar
+    data["jar_totals"] = {}
+    for jar in data["jars"]:
+        if jar["person"]:
+            data["jar_totals"][jar["person"]] = (
+                data["jar_totals"].get(jar["person"], 0.0)
+                + (jar["amount_usd"] or 0))
+
+    tabs = {"Summary": summary_tab(data, year, built_on)}
+    tabs.update(month_tabs(connection, data, year))
+
+    tabs["Income"] = simple_tab(
+        "Every receipt, at GROSS",
+        ["Gross is what the client paid. Platform fees are separate expenses "
+         "— netting them here would lose the deduction."],
+        ["Date", "Source", "Business", "Client", "Amount", "Currency", "USD",
+         "FX rate", "Rate from", "Review?", "Source ID"],
+        [[r["date"], r["source"], r["business"], r["payer"] or "",
+          money(r["amount"]), r["currency"], money(r["amount_usd"]),
+          r["fx_rate"] or "", r["fx_date"] or "",
+          "yes" if r["needs_review"] else "", r["source_id"]]
+         for r in data["income"]], money_columns=[4, 6])
+
+    tabs["Expenses"] = simple_tab(
+        "Every cost", [],
+        ["Date", "Source", "Business", "Vendor", "Category", "Schedule C",
+         "Amount", "Currency", "USD", "Review?", "Source ID"],
+        [[r["date"], r["source"], r["business"], r["vendor"] or "",
+          r["category"], SCHEDULE_C.get(r["category"], "review"),
+          money(r["amount"]), r["currency"], money(r["amount_usd"]),
+          "yes" if r["needs_review"] else "", r["source_id"]]
+         for r in data["expenses"]], money_columns=[6, 8])
+
+    tabs["Excluded"] = simple_tab(
+        "Money deliberately NOT counted",
+        ["Each of these is the same money arriving twice — a payout of income "
+         "already counted, or a transfer between your own accounts.",
+         "Kept visible so every decision can be checked rather than trusted."],
+        ["Date", "Kind", "Source", "Who", "Amount", "Currency", "USD", "Why"],
+        [[r["date"], r["kind"], r["source"], r["who"] or "",
+          money(r["amount"]), r["currency"], money(r["amount_usd"]),
+          r["exclusion_reason"] or ""] for r in data["excluded"]],
+        money_columns=[4, 6], empty_message="none")
+
+    jar_total = db.total_in_jars_usd(connection)
+    jars = Tab(money_columns=[2, 4])
+    jars.title("Wise jars — money set aside, still yours")
+    jars.note("A jar is a labelled pot inside your own account. Putting money "
+              "in it pays nobody.")
+    jars.note("NOT deductible · does NOT count toward $600 · DOES count "
+              "toward the FBAR $10,000 test.")
+    jars.blank()
+    jars.head("Jar", "Person", "Amount", "Currency", "USD", "Read on")
+    for r in data["jars"]:
+        jars.row(r["jar_name"], r["person"] or "", money(r["amount"]),
+                 r["currency"], money(r["amount_usd"]), r["observed_on"])
+    jars.total("TOTAL IN JARS", "", "", "", money(jar_total))
+    jars.blank()
+    jars.section("WHAT DECEMBER COSTS")
+    jars.note("Money still in jars on 31 December is not deductible that year, "
+              "but still inflates taxable profit.")
+    jars.warn(f"At 15.3% self-employment tax, ${jar_total:,.2f} left in jars "
+              f"would cost about "
+              f"${money(jar_total * 0.9235 * 0.153):,.2f} in real tax.")
+    jars.note("Target: jars empty by about 20 December.")
+    tabs["Jars"] = jars
+
+    review = Tab(money_columns=[2])
+    review.title("Everything flagged for a human")
+    review.note("Nothing here is wrong. These are the things the importer "
+                "would not decide on its own.")
+    review.blank()
+    review.head("Date", "Kind", "Amount", "Currency", "Who", "Why")
+    for r in data["review"]:
+        review.warn(r["date"], r["kind"], money(r["amount"]), r["currency"],
+                    r["who"] or "", (r["review_note"] or "")[:250])
+    if not data["review"]:
+        review.row("nothing needs attention")
+    tabs["Review"] = review
+
+    return tabs, data
 
 
 # ===========================================================================
 #  WRITING IT
 # ===========================================================================
+
+TABS = ["Summary"]
+
 
 def find_or_create(year):
     """
@@ -371,7 +448,13 @@ def formulas_present(sheets, sheet_id, tab):
 
 
 def write(sheet_id, tabs, force=False):
-    """Replace each tab's contents. Refuses if a formula would be lost."""
+    """
+    Replace each tab's contents and formatting.
+
+    Refuses if any cell holds a formula. This sheet is generated so there
+    should never be one, but the rule - never overwrite a formula without
+    being asked - has to hold everywhere, not only where it was promised.
+    """
     sheets = gsheets.service()
 
     existing = {s["properties"]["title"]: s["properties"]["sheetId"]
@@ -380,23 +463,41 @@ def write(sheet_id, tabs, force=False):
                     fields="sheets(properties(title,sheetId))"),
                     what="the tax sheet").get("sheets", [])}
 
-    requests = [{"addSheet": {"properties": {"title": name}}}
-                for name in tabs if name not in existing]
-    if requests:
+    # add any tab that does not exist yet
+    missing = [name for name in tabs if name not in existing]
+    if missing:
         gsheets.call(sheets.spreadsheets().batchUpdate(
-            spreadsheetId=sheet_id, body={"requests": requests}),
-            what="adding tabs")
+            spreadsheetId=sheet_id, body={"requests": [
+                {"addSheet": {"properties": {"title": name}}}
+                for name in missing]}), what="adding tabs")
+        existing = {s["properties"]["title"]: s["properties"]["sheetId"]
+                    for s in gsheets.call(sheets.spreadsheets().get(
+                        spreadsheetId=sheet_id,
+                        fields="sheets(properties(title,sheetId))"),
+                        what="the tax sheet").get("sheets", [])}
 
     blocked = []
     if not force:
         for name in tabs:
-            if name in existing:
+            if name in existing and name not in missing:
                 blocked += formulas_present(sheets, sheet_id, name)
     if blocked:
         raise gsheets.GoogleError(
             "Refusing to write - these cells contain formulas:\n  "
             + "\n  ".join(blocked[:10])
             + "\nNothing was changed.")
+
+    # Remove tabs this build no longer produces. An earlier version had a
+    # "By month" tab; leaving it behind would show stale figures beside
+    # current ones, which is worse than not having it.
+    stale = [name for name in existing if name not in tabs]
+    if stale:
+        gsheets.call(sheets.spreadsheets().batchUpdate(
+            spreadsheetId=sheet_id, body={"requests": [
+                {"deleteSheet": {"sheetId": existing[name]}}
+                for name in stale]}), what="removing stale tabs")
+        for name in stale:
+            existing.pop(name)
 
     gsheets.call(sheets.spreadsheets().values().batchClear(
         spreadsheetId=sheet_id, body={"ranges": list(tabs)}),
@@ -405,8 +506,46 @@ def write(sheet_id, tabs, force=False):
     gsheets.call(sheets.spreadsheets().values().batchUpdate(
         spreadsheetId=sheet_id, body={
             "valueInputOption": "RAW",
-            "data": [{"range": name, "values": rows}
-                     for name, rows in tabs.items()],
+            "data": [{"range": name, "values": tab.rows}
+                     for name, tab in tabs.items()],
         }), what="writing the tabs")
 
+    # put the tabs in a sensible order - Summary, then the months, then the
+    # detail. New tabs are appended by Google, so this has to be set each run.
+    requests = [{"updateSheetProperties": {
+        "properties": {"sheetId": existing[name], "index": position},
+        "fields": "index"}}
+        for position, name in enumerate(tabs)]
+    gsheets.call(sheets.spreadsheets().batchUpdate(
+        spreadsheetId=sheet_id, body={"requests": requests}),
+        what="ordering the tabs")
+
+    # formatting, in one batch per tab so a big sheet stays a few calls
+    requests = []
+    for name, tab in tabs.items():
+        requests += format_requests(existing[name], tab,
+                                    freeze_row=freeze_for(tab))
+    for chunk in range(0, len(requests), 60):
+        gsheets.call(sheets.spreadsheets().batchUpdate(
+            spreadsheetId=sheet_id,
+            body={"requests": requests[chunk:chunk + 60]}),
+            what="formatting")
+
     return sheet_id
+
+
+def freeze_for(tab):
+    """Freeze down to the first column-header row, so it stays visible."""
+    for index, style in enumerate(tab.styles):
+        if style == "head":
+            return index + 1
+    return 1
+
+
+def tab_order(tabs):
+    """Summary first, then months in order, then the detail tabs."""
+    months = [n for n in tabs if n[:3] in
+              [m[:3] for m in MONTH_NAMES]]
+    months.sort(key=lambda n: [m[:3] for m in MONTH_NAMES].index(n[:3]))
+    rest = [n for n in tabs if n not in months and n != "Summary"]
+    return ["Summary"] + months + rest

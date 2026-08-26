@@ -119,9 +119,10 @@ def main():
 
             records = wise_import.build_records(
                 connection, txns, profile_label=label, business=business,
-                personal=personal)
+                personal=personal, balance_kind=kind)
             for key in ("income", "expenses", "notes"):
                 totals[key].extend(records[key])
+            totals.setdefault("movements", []).extend(records["jars"])
 
             label_jar = f" ({jar})" if jar else ""
             print(f"   {currency} {kind}{label_jar:<18} {len(txns):>3} txns")
@@ -186,12 +187,15 @@ def main():
         db.upsert_expense(connection, **row)
     for jar in totals["jars"]:
         db.record_jar_balance(connection, **jar)
+    for movement in totals.get("movements", []):
+        db.record_jar_movement(connection, **movement)
     connection.commit()
 
     figures = db.totals(connection, config.SETTINGS["tax_year"])
     print(f"{GREEN}{BOLD}Imported.{OFF}  "
           f"{len(counted)} income, {len(excluded)} excluded, "
-          f"{len(real_expenses)} expenses, {len(totals['jars'])} jars")
+          f"{len(real_expenses)} expenses, {len(totals['jars'])} jars, "
+          f"{len(totals.get('movements', []))} jar movements")
     print()
     print(f"   income      ${figures['income_usd']:>12,.2f}")
     print(f"   expenses    ${figures['expenses_usd']:>12,.2f}")

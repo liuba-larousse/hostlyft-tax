@@ -90,7 +90,8 @@ from taxlib import config
 #   1  income, expenses, stripe_payouts, fx_rates, alerts_sent
 #   2  + business column on income and expenses (hostlyft | marcus)
 #      + wise_jars, contractor_ledger
-SCHEMA_VERSION = 2
+#   3  + jar_movements: money moved INTO and OUT OF each jar
+SCHEMA_VERSION = 3
 
 
 # ===========================================================================
@@ -375,6 +376,48 @@ CREATE TABLE IF NOT EXISTS wise_jars (
 CREATE INDEX IF NOT EXISTS idx_jars_person ON wise_jars (person);
 
 
+-- ---------------------------------------------------------- jar_movements
+-- Money moved into or out of a jar.
+--
+-- STILL NOT A PAYMENT. Moving money into Ayoka's jar does not pay Ayoka -
+-- it is Liuba's money, relabelled inside her own account. It is not
+-- deductible and does not count toward $600. Only a transfer OUT of Wise
+-- to the person is.
+--
+-- So why record it? Because it is the best available ESTIMATE of what the
+-- deduction will become. The team withdraw before year end, so this month's
+-- allocation is next quarter's deduction. Kept in its own table, never in
+-- `expenses`, so the two can be shown side by side without any chance of
+-- one being added to the other.
+CREATE TABLE IF NOT EXISTS jar_movements (
+    id                INTEGER PRIMARY KEY,
+
+    source_id         TEXT    NOT NULL UNIQUE,   -- the Wise reference
+    date              TEXT    NOT NULL,
+    tax_year          INTEGER,
+
+    jar_name          TEXT    NOT NULL,
+    person            TEXT,                      -- once matched to the roster
+
+    -- 'in'  money allocated to the jar
+    -- 'out' money taken back out of the jar into the operating balance
+    direction         TEXT    NOT NULL,
+
+    amount            REAL    NOT NULL,
+    currency          TEXT    NOT NULL,
+    amount_usd        REAL,
+    fx_rate           REAL,
+    fx_date           TEXT,
+
+    description       TEXT,
+    created_at        TEXT    NOT NULL,
+    updated_at        TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_jarmoves_person ON jar_movements (person);
+CREATE INDEX IF NOT EXISTS idx_jarmoves_year ON jar_movements (tax_year);
+
+
 -- ------------------------------------------------------- contractor_ledger
 -- The three numbers per person that must never be confused with each other:
 --
@@ -447,6 +490,16 @@ def _add_column_if_missing(connection, table, column, definition):
     return True
 
 
+def _migrate_2_to_3(connection):
+    """
+    Version 2 -> 3.
+
+    Adds jar_movements. Nothing to alter - the CREATE TABLE above makes it -
+    but the step exists so the version is recorded and the intent is on file.
+    """
+    return ["added jar_movements (allocations into and out of each jar)"]
+
+
 def _migrate_1_to_2(connection):
     """
     Version 1 -> 2.
@@ -479,6 +532,7 @@ def _migrate_1_to_2(connection):
 # version to reach -> the function that gets there
 MIGRATIONS = {
     2: _migrate_1_to_2,
+    3: _migrate_2_to_3,
 }
 
 
@@ -1027,6 +1081,70 @@ def total_in_jars_usd(connection, on_or_before=None):
 # ===========================================================================
 #  CONTRACTOR LEDGER  -  the three numbers, side by side
 # ===========================================================================
+
+def record_jar_movement(connection, *, source_id, date, jar_name, direction,
+                        amount, currency, person=None, amount_usd=None,
+                        fx_rate=None, fx_date=None, description=None):
+    """
+    Record money moving into or out of a jar.
+
+    NOT an expense and never counted as one. See the table comment.
+    """
+    if direction not in ("in", "out"):
+        raise ValueError(f"direction must be 'in' or 'out', not '{direction}'")
+
+    return _upsert(
+        connection, "jar_movements", {"source_id": str(source_id)},
+        {
+            "date": date, "tax_year": _year_of(date),
+            "jar_name": jar_name, "person": person, "direction": direction,
+            "amount": round_money(amount), "currency": currency.upper(),
+            "amount_usd": round_money(amount_usd),
+            "fx_rate": fx_rate, "fx_date": fx_date,
+            "description": description,
+        },
+        protect_conversion=True,
+    )
+
+
+def jar_allocations_by_month(connection, tax_year, person=None):
+    """
+    How much was set aside for each person, month by month.
+
+    This is an ESTIMATE of a future deduction, not a deduction. The team
+    withdraw before year end, so what is allocated now becomes deductible
+    when it leaves. Shown beside the actual withdrawals so the gap is
+    visible; never added to them.
+    """
+    where = "AND person = ?" if person else ""
+    params = [tax_year] + ([person] if person else [])
+    return connection.execute(
+        f"SELECT substr(date, 1, 7) AS month, person, "
+        f"       SUM(CASE WHEN direction = 'in' THEN amount_usd ELSE 0 END) "
+        f"           AS allocated, "
+        f"       SUM(CASE WHEN direction = 'out' THEN amount_usd ELSE 0 END) "
+        f"           AS returned "
+        f"FROM jar_movements WHERE tax_year = ? AND person IS NOT NULL {where} "
+        f"GROUP BY month, person ORDER BY month, person", params).fetchall()
+
+
+def contractor_withdrawals_by_month(connection, tax_year):
+    """Actual payments out, month by month - the real deduction."""
+    rows = {}
+    for person in config.CONTRACTORS:
+        labels = config.all_names_for(person)
+        clauses = " OR ".join(["vendor = ? COLLATE NOCASE"] * len(labels)
+                              + ["description LIKE ?"] * len(labels))
+        values = list(labels) + [f"%{label}%" for label in labels]
+        for row in connection.execute(
+                f"SELECT substr(date, 1, 7) AS month, "
+                f"       COALESCE(SUM(amount_usd), 0) AS withdrawn "
+                f"FROM expenses WHERE excluded = 0 AND category = ? "
+                f"AND tax_year = ? AND ({clauses}) GROUP BY month",
+                [CATEGORY_CONTRACTOR, tax_year] + values):
+            rows[(row["month"], person["name"])] = round_money(row["withdrawn"])
+    return rows
+
 
 def record_contractor_ledger(connection, *, person, tax_year, as_of,
                              earned_usd=0, in_jar_usd=0, withdrawn_usd=0,
