@@ -101,6 +101,11 @@ python -m pytest
 | `taxlib/categorize.py` | Applies the rules in `rules.txt`. |
 | `scripts/categorize.py` | Sorts expenses; lists anything it can't. |
 | `rules.txt` | **Your** plain-English category rules. Edit freely. |
+| `taxlib/gsheets.py` | Google sign-in, retries, reading cell notes. |
+| `taxlib/tax_sheet.py` | Builds the tax spreadsheet. |
+| `scripts/google_login.py` | One-time Google sign-in. |
+| `scripts/build_tax_sheet.py` | Creates or refreshes the tax sheet. |
+| `GOOGLE-SETUP.md` | Walkthrough for connecting Google. |
 | `INCOME-SOURCES.md` | Where the money actually comes from. |
 | `scripts/wise_keys.py` | Creates and checks the Wise key pair. |
 | `scripts/` | The things you actually run — pulling from Stripe, calculating tax, sending reminders. |
@@ -481,7 +486,7 @@ Each migration step is written so running it twice is harmless. Back up first �
 | 8 | Categorization | ✅ done |
 | 9 | Tax calculator (both businesses combined) | not started |
 | 10 | Reminders — quarterly, FBAR, jars, contractor alarm | not started |
-| 11 | Google Sheet reconciliation tabs | not started |
+| 11 | Google tax sheet (separate, cash-received) | ✅ done |
 | 12 | Contractor forms tracker (W-9 / W-8BEN) | not started |
 | 13 | Scheduling + migration to the main Mac | not started |
 
