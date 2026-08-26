@@ -352,3 +352,43 @@ class TestVendorNaming:
             merchant = categorize.merchant_from_card(description)
             _, word = categorize.categorize(description, vendor=merchant)
             assert categorize.tidy_vendor(None, description, word) == expected
+
+
+class TestRefundDirection:
+    """
+    Money coming back is not all the same thing, and the difference decides
+    which Schedule C line it lands on.
+
+      FROM a vendor  -> the purchase cost less. Belongs in the purchase's
+                        own category (line 27a, or wherever it sat).
+      TO a client    -> a return or allowance against gross receipts,
+                        Schedule C line 2.
+
+    Matching the bare word "refund" put a $150 software refund on line 2,
+    where it reduced revenue instead of reducing costs.
+    """
+
+    def test_a_vendor_refund_takes_the_category_of_what_it_reverses(self):
+        from taxlib import categorize
+        category, _ = categorize.categorize(
+            "MY DATA VALUE LIMITED [Merchandise] — refund")
+        assert category == "software"
+
+    def test_a_refund_issued_to_a_client_is_a_return_or_allowance(self):
+        from taxlib import categorize
+        category, _ = categorize.categorize(
+            "Refund of 131.00 against a 270.00 payment [Partially refunded]")
+        assert category == "refunds to clients"
+
+    def test_cashback_has_its_own_category(self):
+        from taxlib import categorize
+        category, _ = categorize.categorize(
+            "CREDIT-CASH BACK REWARD [Payment/Credit] — cashback")
+        assert category == "cashback and rebates"
+
+
+def test_email_hosting_is_grouped_with_the_phone_line():
+    """Both are Schedule C line 25, utilities."""
+    from taxlib import categorize
+    assert categorize.categorize("NEO [Other Services]")[0] == "phone and internet"
+    assert categorize.categorize("Quo openphone")[0] == "phone and internet"

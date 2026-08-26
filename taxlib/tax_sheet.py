@@ -54,6 +54,10 @@ SCHEDULE_C = {
     "travel": "24a - Travel",
     "taxes and licences": "23 - Taxes and licenses",
     "refunds to clients": "2 - Returns and allowances",
+    # Cashback is a rebate on spending, so it nets against the costs it came
+    # from rather than being reported as income. It carries a negative
+    # amount, which is why it reduces line 27a rather than adding to it.
+    "cashback and rebates": "27a - Other expenses (reduces)",
     "uncategorized": "NEEDS A CATEGORY",
 }
 

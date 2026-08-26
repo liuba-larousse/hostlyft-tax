@@ -33,10 +33,14 @@ software = PriceLabs, ClickUp, HubSpot, Supabase, Anthropic, Claude, OpenAI,
            Zoom, Canva, Airtable, Hostaway, Smoobu, Guesty, Dropbox, Adobe,
            Claude.ai, Google One, Vercel, Github, Cursor, Perplexity,
            HeyGen, Paddle.net, Descript, Loom, Calendly, Typeform,
-           Bitwarden, 1Password, Lastpass, Sentry, Sentinel
+           Bitwarden, 1Password, Lastpass, Sentry, Sentinel,
+           My Data Value, MY DATA VALUE LIMITED
 
 # --- phone and internet -------------------------- [Schedule C line 25] ----
-phone and internet = Quo, OpenPhone, openpho, Vonage, Skype, Twilio
+# Email hosting sits here rather than under software: it is the same
+# kind of cost as the phone line, and Schedule C line 25 covers both.
+phone and internet = Quo, OpenPhone, openpho, Vonage, Skype, Twilio,
+                     Neo, Fastmail, Zoho Mail, Proton Mail
 
 # --- money movement ------------------------------ [Schedule C line 10] ----
 # What the platforms keep. Deductible, and easy to lose track of because it
@@ -69,7 +73,11 @@ travel = airline, hotel, Booking.com, Airbnb, Uber, Lyft, train, flight,
 # "returns and allowances", taken off gross receipts rather than added to
 # expenses - the category is kept separate here so it can be reported that
 # way at filing time.
-refunds to clients = refund, partial refund, credit note, chargeback
+# Deliberately NOT the bare word "refund". Money coming back FROM a vendor
+# is not a return or allowance - it makes that purchase cost less, and
+# belongs in the purchase's own category. Only money given back to a CLIENT
+# belongs on line 2.
+refunds to clients = Refund of, partial refund of, credit note, chargeback
 
 # --- money coming back ------------------------- [reduces the expense] ---
 # Cashback is a rebate on spending, not income. It reduces what the
