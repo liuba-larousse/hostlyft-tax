@@ -399,11 +399,175 @@ Never writes to her existing tabs. Refuses to run rather than overwrite anything
 
 ### Stage 12 — Contractor forms tracker
 
+**The roster is FIVE people, not four.** Olaide Olaniyan — Liuba's husband, a
+foreign contractor — was added during the build, after this plan was first
+written. He is confirmed a contractor and is the largest single payee. Any list
+here that names only four people is out of date; `taxlib/config.py` is the roster
+of record.
+
 - **Katerina** — W-9 on file? 1099-NEC alert at $600 of **withdrawals**
-- **Ayoka, Jane, Sunniva** — W-8BEN on file? No 1099
+- **Ayoka, Olaide, Jane, Sunniva** — W-8BEN on file? No 1099
 - Flags anyone missing their form — the real exposure
 - **Sunniva still gets a year-end flag even if under $600**, as she asked
 - Alerts recorded so each fires once
+
+A form being *required* and a form being *on file* are different facts. The roster
+knows the first; only this stage records the second, so it needs its own table
+rather than a column bolted onto the roster.
+
+### Stage 12b — The rest of the deductions (home office, travel, meals, equipment)
+
+**She asked for this explicitly, reversing the earlier "out of scope" decision.**
+It is recorded here so it does not have to be asked for again. Build it after
+Stage 12 and **before** Stage 13, which stays last.
+
+#### First, the thing that decides how much effort this deserves
+
+Her US income tax is **$0** and stays $0, because the FEIE already excludes all of
+her profit. So a dollar of extra deduction saves her **nothing in income tax**. It
+only reduces **self-employment tax**, which is her entire bill.
+
+That makes every deduction worth about:
+
+```
+15.3% x 92.35% = 14.13 cents per dollar deducted
+```
+
+Real money — $1,000 of home office is ~$141 — but not the 30–40% people assume.
+**Say this once, plainly, so she can decide what is worth the paperwork.** Do not
+let it read as discouragement: these are legitimate deductions she is entitled to.
+
+**The corollary, which matters more than it looks:** only deductions that reduce
+**Schedule C net profit** are worth anything to her. Two popular ones do not:
+
+| Deduction | Reduces income tax | Reduces SE tax | Worth to her |
+|---|---|---|---|
+| Home office, travel, meals, equipment, mileage | yes | **yes** | **~14.13%** |
+| Self-employed health insurance (Sch. 1) | yes | no | **$0** |
+| SEP-IRA / solo 401(k) | yes | no | **$0** |
+
+Do not model the bottom two. Retirement contributions carry an additional trap:
+FEIE-excluded income generally cannot support an IRA or SEP contribution at all.
+Flag, do not build, and do not encourage without proper advice.
+
+A small honest counterweight, stated once: lowering net profit also lowers the US
+Social Security credits she earns for the year. At her level this is minor, but it
+is not zero, and she should hear it rather than discover it.
+
+#### Verify these 2026 figures on the Mac before using them — same discipline as finding 2
+
+The planning sandbox could not reach `irs.gov`. **None of the numbers below were
+read from the primary source.** Verify each, then cite it inline in the code:
+
+- **Simplified home office rate** — believed **$5/sq ft, capped at 300 sq ft
+  ($1,500 max)**. Source: https://www.irs.gov/businesses/small-businesses-self-employed/simplified-option-for-home-office-deduction
+- **Standard mileage rate 2026** — **unknown, do not guess.** 2025 was 70¢/mile;
+  the rate changes most years. Source: https://www.irs.gov/tax-professionals/standard-mileage-rates
+- **Business meals still 50%** — confirm the limit for 2026.
+  Source: https://www.irs.gov/publications/p463
+- **De minimis safe harbor $2,500 per item** — Treas. Reg. §1.263(a)-1(f).
+  Source: https://www.irs.gov/publications/p535
+
+Extend `verify_brackets.py` (or ship its sibling) so each prints beside its URL.
+
+#### Home office — Form 8829
+
+**She rents in France.** Two things follow, and they simplify the build:
+
+- A foreign home is fine. Nothing requires the office to be in the US.
+- **Renters take no depreciation**, which is the hardest part of Form 8829. Skip it
+  entirely rather than writing code that can never run.
+
+Two methods, and **the tool should compute both and show which wins** rather than
+picking for her:
+
+- **Simplified** — office square footage x the rate, capped at 300 sq ft
+- **Actual** — business-use percentage (office area ÷ total home area) applied to
+  rent, utilities, renter's insurance, and internet already claimed elsewhere
+
+For a renter in France, **actual usually beats simplified**, because rent is the
+largest input and the simplified cap is low. Compute, do not assume.
+
+Conditions, which must be stated in the output rather than silently assumed:
+
+- **Exclusive use** — the space is used *only* for work. A dining table used for
+  work in the day does not qualify. This is the condition people fail.
+- **Regular use**, and it is her **principal place of business** — for her, plainly
+  yes; Hostlyft is run from home.
+- **Limited to net profit.** The deduction cannot create or deepen a loss. Excess
+  carries forward to the next year. Model the limit; do not let it go negative.
+
+**Careful — do not double-count.** `rules.txt` already books internet under *phone
+and internet* at 100%. If internet is also fed into the actual-method home office
+percentage, it is deducted twice. Pick one, and make the code refuse the overlap
+rather than trusting whoever edits the file next.
+
+#### Travel — Schedule C line 24a
+
+Her **tax home is France**, which is what "away from home" is measured against.
+
+- Transport and lodging on a business trip: **100%**
+- Meals while travelling: **50%** — same haircut as any business meal
+- **Commuting is never deductible**, at any distance
+- A trip that mixes business and personal is deductible only on the business part
+
+The `travel` category already exists in `rules.txt`. It currently holds very
+little, which is worth showing her — it suggests trips have been paid for
+personally and never claimed.
+
+#### Meals — Schedule C line 24b — THIS ONE NEEDS A CODE CHANGE
+
+Business meals are **50% deductible**. The temporary 100% restaurant allowance ran
+**2021–2022 only and has expired** — do not reintroduce it.
+
+**The tax calculator currently sums every expense at 100%.** Meals are the first
+category that is not fully deductible, so this is not merely a new line in
+`rules.txt`:
+
+- categories need a **deductible percentage**, defaulting to 100%
+- `calc_tax.py` must apply it, and **show the haircut in its working** rather than
+  quietly halving a number she can see in her own sheet
+- the Google Sheet must show gross spend *and* the deductible amount, or the sheet
+  and the tax figure will appear to disagree
+
+**Bank data cannot establish a meal's business purpose.** A card row says
+"restaurant", never who was there or why. The IRS requires the business purpose and
+the people present. So meals need **her input per entry** — `manual_entry.py`
+already exists for this. Anything unconfirmed stays out of the deduction and is
+listed, never guessed in. Guessing here is exactly the kind of wrong deduction the
+whole tool was built to avoid.
+
+#### Vehicle and mileage — ASK FIRST, do not build blind
+
+She lives in France and may have little or no business vehicle use. **Ask before
+building any of this.** If it applies:
+
+- Standard mileage rate x business miles (verify the 2026 rate first)
+- Requires a contemporaneous **log**: date, destination, business purpose, miles
+- Without a log the deduction does not survive scrutiny — say so plainly
+
+#### Equipment — keep it simple
+
+- Elect the **de minimis safe harbor** and expense anything under the threshold in
+  the year it was bought. At her scale this removes depreciation entirely.
+- §179 and bonus depreciation exist for larger purchases and are almost certainly
+  unnecessary. Mention, do not build.
+- A laptop or phone used partly personally is deductible **only at the business-use
+  percentage**. Ask for the split; never assume 100%.
+
+#### What this stage actually needs from her
+
+Unlike every other stage, this one **cannot be derived from Stripe, Wise or Capital
+One**. Bank data shows the amount, never the purpose. It needs her to supply:
+
+- total home area, office area, monthly rent, utilities, renter's insurance
+- the business purpose and attendees for each meal
+- a mileage log, if vehicle use applies at all
+- the business-use percentage for any part-personal equipment
+
+Design it to **ask, store the answer, and never ask twice** — the same shape as the
+categorisation rules. Store the home office inputs in a settings block she can edit
+without touching code, and re-use them each year.
 
 ### Stage 13 — Scheduling (LAST — and on her main computer)
 
@@ -553,13 +717,31 @@ Each stage ships tests runnable in one command:
     period; income, expense and contractor totals must be identical each time
 15. A simulated failure (bad token) produces an email naming the credential, not a
     stack trace; the heartbeat fires when no sync has succeeded in 7 days
+16. Home office: simplified and actual both computed; the better one identified;
+    the deduction capped at net profit and never turning it negative; internet
+    refused as a double-count when already claimed under phone and internet
+17. A business meal is deducted at **50%**, not 100%, and the working shows the
+    haircut; a meal with no recorded business purpose is excluded and listed
+18. A deduction of $1,000 reduces income tax by **$0** and SE tax by **~$141** —
+    proving the FEIE framing above is what the calculator actually does
 
 ## Out of scope — flag, don't guess
 
 French income tax and French social contributions (her likely larger exposure),
 Foreign Tax Credit modelling (nothing to credit — she pays no French income tax),
-US state tax, home-office/vehicle/mileage/depreciation, filing anything, paying
-anyone. Also out of scope: advising Katerina on her own US filing — that is hers.
+US state tax, filing anything, paying anyone. Also out of scope: advising Katerina
+on her own US filing — that is hers.
+
+**Changed — home office, travel, meals, equipment and mileage are now IN scope.**
+An earlier version of this plan listed them here. She asked for them explicitly;
+they are **Stage 12b** above. Do not move them back.
+
+Still deliberately not modelled, for a reason worth keeping: **self-employed health
+insurance and retirement contributions (SEP-IRA, solo 401(k))**. Both reduce income
+tax only, and her income tax is already $0 under the FEIE — so both are worth
+exactly **$0** to her. Retirement carries the extra problem that FEIE-excluded
+income generally cannot support a contribution at all. Flag if she asks; do not
+build, and do not recommend without proper advice.
 
 **One decision to raise before she files, not now:** whether the Marcus work is the
 same trade or business as Hostlyft (one Schedule C) or a separate one (two
