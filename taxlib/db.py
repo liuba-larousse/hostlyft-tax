@@ -986,6 +986,17 @@ def totals(connection, tax_year=None, business=None):
         f"WHERE excluded = 0 AND category = 'uncategorized' {where_year}"
     )
 
+    # How much of each category actually reduces taxable profit. Meals are
+    # the only one below 100% today; the table lives in config.py so the
+    # rule can change without touching this query.
+    by_category = connection.execute(
+        f"SELECT category, COALESCE(SUM(amount_usd), 0) AS usd "
+        f"FROM expenses WHERE excluded = 0 {where_year} GROUP BY category",
+        params).fetchall()
+    deductible = round_money(sum(
+        (row["usd"] or 0) * config.deductible_share(row["category"])
+        for row in by_category))
+
     income_usd = round_money(income_row["usd"])
     expenses_usd = round_money(expense_row["usd"])
 
@@ -996,8 +1007,20 @@ def totals(connection, tax_year=None, business=None):
         "income_usd": income_usd,
         "expense_count": expense_row["n"],
         "expenses_usd": expenses_usd,
-        # Net profit is what the tax calculator in Stage 9 starts from.
-        "net_profit_usd": round_money(income_usd - expenses_usd),
+
+        # WHAT YOU SPENT, AND WHAT YOU MAY DEDUCT, ARE NOT THE SAME NUMBER.
+        #
+        # Almost every category is deductible in full. Business meals are
+        # 50%. Reporting only the deductible figure would leave the sheet
+        # disagreeing with her bank for no visible reason, so both are
+        # carried and the difference is shown as its own line.
+        "deductible_expenses_usd": deductible,
+        "non_deductible_usd": round_money(expenses_usd - deductible),
+
+        # Net profit is what the tax calculator in Stage 9 starts from, and
+        # it uses the DEDUCTIBLE figure - that is the whole point of it.
+        "net_profit_usd": round_money(income_usd - deductible),
+        "net_profit_before_limits_usd": round_money(income_usd - expenses_usd),
         "excluded_income_count": excluded_income["n"],
         "needs_review_count": review_income["n"] + review_expenses["n"],
         "uncategorized_expense_count": uncategorized["n"],

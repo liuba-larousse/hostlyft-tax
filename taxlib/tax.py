@@ -247,9 +247,40 @@ def quarterly(total_tax, paid_so_far=0.0):
     return _round(max(0.0, total_tax - paid_so_far) / 4)
 
 
-def from_database(connection, tax_year, settings=None):
-    """Run the estimate against what is actually recorded."""
+def from_database(connection, tax_year, settings=None,
+                  include_home_office=True, today=None):
+    """
+    Run the estimate against what is actually recorded.
+
+    The home office is applied here rather than inside db.totals because it
+    is not a transaction. Nothing was paid to anybody for it - it is a
+    share of costs you were paying anyway - so it has no row in `expenses`
+    and must not be given one. It reduces net profit at the point the tax
+    is worked out.
+    """
+    from taxlib import home_office as ho
+
     totals = db.totals(connection, tax_year)
-    result = estimate(totals["net_profit_usd"], settings)
+    profit_before = totals["net_profit_usd"]
+
+    office, office_problem = None, None
+    if include_home_office:
+        try:
+            office = ho.best(connection, tax_year, net_profit=profit_before,
+                             today=today)
+        except ho.HomeOfficeNotClaimed as problem:
+            office_problem = str(problem)
+        except Exception as problem:      # noqa: BLE001 - reported, not raised
+            # A missing exchange rate must not stop the tax being estimated.
+            office_problem = f"The home office could not be worked out: {problem}"
+
+    claimed = office["claimed_usd"] if office else 0.0
+    net_profit = db.round_money(profit_before - claimed)
+
+    result = estimate(net_profit, settings)
     result["totals"] = totals
+    result["net_profit_before_home_office"] = profit_before
+    result["home_office"] = office
+    result["home_office_problem"] = office_problem
+    result["home_office_usd"] = claimed
     return result

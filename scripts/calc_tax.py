@@ -65,6 +65,52 @@ def main():
         print("   entity - both land on the same 1040, and self-employment")
         print("   tax is charged on the combined figure.")
 
+        if t["non_deductible_usd"]:
+            print()
+            print(f"   Of those expenses, ${t['non_deductible_usd']:,.2f} is "
+                  f"NOT deductible.")
+            print("   Business meals count at 50%, not 100%. What you spent")
+            print("   and what you may deduct are different numbers.")
+            print(f"   Deductible expenses: "
+                  f"${t['deductible_expenses_usd']:,.2f}")
+
+        office = result.get("home_office")
+        if office:
+            actual_m, simple_m = office["actual"], office["simplified"]
+            print()
+            print(f"{BOLD}   HOME OFFICE{OFF}")
+            print(f"   Actual costs:  {actual_m['share_percent']}% of "
+                  f"{actual_m['currency']} "
+                  f"{actual_m['monthly_cost_native']:,.2f}/month "
+                  f"x {actual_m['months_counted']} months"
+                  f"  = ${actual_m['amount_usd']:,.2f}")
+            print(f"   Simplified:    {simple_m['office_sqft']:,.0f} sq ft "
+                  f"x ${simple_m['rate']:.2f}"
+                  f"                       = "
+                  f"${simple_m['amount_usd']:,.2f}")
+            print(f"   {GREEN}Using the {office['better_method']} method - "
+                  f"${office['difference_usd']:,.2f} better.{OFF}")
+            if actual_m["part_year"]:
+                print(f"   {YELLOW}Only {actual_m['months_counted']} months "
+                      f"have finished, so this is a part-year figure and "
+                      f"will grow.{OFF}")
+            if office["limited_by_profit"]:
+                print(f"   {YELLOW}Capped at your net profit; "
+                      f"${office['carried_forward_usd']:,.2f} carries "
+                      f"forward to next year.{OFF}")
+            print(f"   Deduction: ${office['claimed_usd']:,.2f}"
+                  f"   -> saves about ${office['tax_saved_usd']:,.2f} in "
+                  f"self-employment tax")
+            print(f"   {YELLOW}This relies on the 12 m2 being used ONLY for "
+                  f"work. That is the test people fail.{OFF}")
+            print(f"   NET PROFIT AFTER HOME OFFICE   "
+                  f"${result['net_profit']:,.2f}")
+        elif result.get("home_office_problem"):
+            print()
+            print(f"{YELLOW}   HOME OFFICE NOT CLAIMED{OFF}")
+            for line in result["home_office_problem"].splitlines():
+                print(f"   {line}")
+
     net_profit = result["net_profit"]
 
     print(f"\n{BOLD}SELF-EMPLOYMENT TAX{OFF}   — in your case, nearly the "

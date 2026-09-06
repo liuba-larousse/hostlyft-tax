@@ -63,6 +63,29 @@ professional services = accountant, bookkeep, attorney, lawyer, legal,
 # --- advertising --------------------------------- [Schedule C line 8] -----
 advertising = Google Ads, Facebook, Meta Platforms, LinkedIn, advertising
 
+# NOTE: this block sits ABOVE travel deliberately. Rules are tried
+# top to bottom, and the travel rule matches the bare word "Uber" -
+# so with travel first, "UBER *EATS" would be deducted as a taxi.
+# --- business meals ------------------------------- [Schedule C line 24b] --
+# ONLY 50% OF THESE IS DEDUCTIBLE. The temporary 100% allowance for
+# restaurant meals ran in 2021-2022 only and has expired. The halving is
+# applied by the tax calculator, not here - this file only decides the
+# category. See CATEGORY_DEDUCTIBLE_SHARE in taxlib/config.py.
+#
+# A MEAL NEEDS A BUSINESS REASON, AND THE BANK CANNOT SEE ONE.
+# A card row says "restaurant". It cannot say who was there or why, and
+# the IRS asks for both. So a row landing here is CATEGORISED, not yet
+# proven: confirm the business purpose and who was present with
+#     python scripts/meals.py
+# Anything unconfirmed is left out of the deduction and listed.
+#
+# Lunch on your own near home is a personal living expense, not a business
+# meal, however much you were thinking about work at the time.
+meals = restaurant, brasserie, bistro, boulangerie, cafe, café, coffee,
+        traiteur, pizzeria, trattoria, osteria, sushi, kebab, burger,
+        McDonald, Starbucks, Pret A Manger, Deliveroo, Uber Eats,
+        UBER *EATS, Just Eat, Glovo, DoorDash, catering
+
 # --- travel -------------------------------------- [Schedule C line 24a] ---
 travel = airline, hotel, Booking.com, Airbnb, Uber, Lyft, train, flight,
          SNCF, Trainline, Eurostar, Ryanair, easyJet, Air France,

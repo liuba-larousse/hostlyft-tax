@@ -134,6 +134,86 @@ SETTINGS = {
 #     WITHDRAWALS ONLY. Money sitting in a Wise jar is still Liuba's money -
 #     allocating it pays nobody. See taxlib/db.py.
 
+# ===========================================================================
+#  HOME OFFICE  -  Stage 12b
+# ===========================================================================
+#
+# Edit these; do not edit the code that uses them.
+#
+# WHAT THIS IS WORTH, so you can judge the paperwork against the payoff.
+# Your US income tax is already $0 because the Foreign Earned Income
+# Exclusion covers all of your profit. So a deduction saves you nothing in
+# income tax - it only reduces SELF-EMPLOYMENT tax, at about 14 cents in
+# the dollar. Worth having; not the 30-40% people assume.
+#
+# THE TEST YOU MUST ACTUALLY MEET - "exclusive and regular use".
+# The 12 m2 must be used ONLY for work. Not a spare room that is also a
+# guest room; not a desk in the corner of the living room. A dining table
+# you clear away in the evening does NOT qualify, and this is the
+# condition people fail. If the room is not exclusively an office, set
+# EXCLUSIVE_USE to False and the deduction is not claimed.
+#
+# A foreign home is fine - nothing requires the office to be in the US.
+# And because you RENT, there is no depreciation to work out, which is the
+# hardest part of Form 8829. That does not apply to you at all.
+
+HOME_OFFICE = {
+    # Is it used exclusively and regularly for business? If not, no claim.
+    "exclusive_use": True,
+
+    # Areas. Any unit, as long as both are the SAME unit - only the ratio
+    # matters for the actual-cost method.
+    "total_area": 60.0,
+    "office_area": 12.0,
+    "area_unit": "m2",
+
+    # What you pay for the whole home, per month, in this currency.
+    #
+    # UTILITIES SHOULD NOT INCLUDE INTERNET. Internet is already deducted
+    # in full under "phone and internet" in rules.txt. Counting it here as
+    # well would deduct part of it twice. If your 120 includes internet,
+    # take it out here.
+    "monthly_rent": 720.0,
+    "monthly_utilities": 120.0,
+    "monthly_insurance": 0.0,          # renter's / contents insurance
+    "currency": "EUR",
+
+    # How many months of the year the office was used this way.
+    "months": 12,
+}
+
+# The simplified alternative the IRS offers: a flat rate per square foot,
+# capped. VERIFY BOTH FIGURES against
+# https://www.irs.gov/businesses/small-businesses-self-employed/simplified-option-for-home-office-deduction
+# before relying on them - they were not read from the IRS site.
+SIMPLIFIED_HOME_OFFICE_RATE_PER_SQFT = 5.00
+SIMPLIFIED_HOME_OFFICE_MAX_SQFT = 300
+SQFT_PER_SQM = 10.7639
+
+
+# ===========================================================================
+#  HOW MUCH OF EACH CATEGORY IS DEDUCTIBLE
+# ===========================================================================
+#
+# Almost everything a business spends is deductible in full. Meals are the
+# exception, and they are the reason this table exists.
+#
+# BUSINESS MEALS ARE 50% DEDUCTIBLE. The temporary 100% allowance for
+# restaurant meals ran in 2021 and 2022 only and has expired - do not
+# reintroduce it. IRS Publication 463.
+#
+# Anything not listed here is treated as 100% deductible.
+
+CATEGORY_DEDUCTIBLE_SHARE = {
+    "meals": 0.50,
+}
+
+
+def deductible_share(category):
+    """How much of this category actually reduces taxable profit."""
+    return CATEGORY_DEDUCTIBLE_SHARE.get((category or "").strip().lower(), 1.0)
+
+
 CONTRACTORS = [
     {
         "name": "Katerina Mrvova",

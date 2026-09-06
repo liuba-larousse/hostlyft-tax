@@ -493,6 +493,24 @@ read from the primary source.** Verify each, then cite it inline in the code:
 
 Extend `verify_brackets.py` (or ship its sibling) so each prints beside its URL.
 
+#### Her actual figures — given 6 September 2026, do not re-ask
+
+| | |
+|---|---|
+| Home total area | **60 m²** |
+| Office area | **12 m²** → **20% business use** |
+| Rent | **€720 / month** |
+| Utilities | **€120 / month** |
+| Insurance | not given — assumed €0 |
+
+Stored in `HOME_OFFICE` in `taxlib/config.py`. Actual method wins by a wide
+margin (~$2,345/yr against ~$646 simplified, on a full year).
+
+**Still to confirm with her:** (1) that the 12 m² is used *exclusively* for work —
+the whole deduction rests on it; (2) whether the €120 utilities includes internet,
+which is already deducted in full under *phone and internet* and would otherwise be
+counted twice.
+
 #### Home office — Form 8829
 
 **She rents in France.** Two things follow, and they simplify the build:

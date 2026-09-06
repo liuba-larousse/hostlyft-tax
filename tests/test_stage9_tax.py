@@ -200,7 +200,8 @@ def test_it_runs_against_the_database_and_shows_its_working():
                       category="contractor")
     conn.commit()
 
-    result = tax.from_database(conn, 2026)
+    result = tax.from_database(conn, 2026,
+                               include_home_office=False)
 
     assert result["net_profit"] == 50_000.00
     assert result["income_tax"]["total"] == 0.00
@@ -227,7 +228,8 @@ def test_both_businesses_are_taxed_together():
                      business="marcus")
     conn.commit()
 
-    combined = tax.from_database(conn, 2026)
+    combined = tax.from_database(conn, 2026,
+                                 include_home_office=False)
     separate = (tax.estimate(30_000)["total"] + tax.estimate(20_000)["total"])
 
     assert combined["net_profit"] == 50_000.00
