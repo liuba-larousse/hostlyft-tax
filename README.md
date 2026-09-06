@@ -460,6 +460,58 @@ certifies foreign status. A missing W-9 TIN triggers 24% backup withholding.
 
 ---
 
+## Reconciliation
+
+```
+python scripts/reconcile.py            # compare, print, record
+python scripts/reconcile.py --no-save  # just look
+```
+
+**Your accounting sheet is only ever read.** Nothing in this system writes to it.
+The tax sheet, which this system does own, is separate.
+
+### Per person — three numbers that must never be confused
+
+| Number | Where it comes from | What it's for |
+|---|---|---|
+| **Earned** | your sheet's split calculation | team management |
+| **Withdrawn** | actual Wise transfers out | **the tax deduction** |
+| **In jar** | Wise savings balances | money set aside, still yours |
+
+`gap = earned − withdrawn − in jar`. Positive means someone has earned money that
+has neither been paid to them nor set aside. Negative means more has been paid or
+reserved than the sheet says they earned.
+
+**The split rules are read, never recalculated.** The 5% off the top, the 70%
+shared between Katerina and Ayoka, Evgeniya's 80%, Sunniva's $25/hr — all of that
+already lives in your sheet's formulas. Reimplementing it here would create a
+second version to drift out of step with the first.
+
+**Rows are found by their label, never their position.** The monthly tabs are not
+identically laid out — May has an extra payout row that July doesn't, which shifts
+everything below it. Reading "row 56" would pick up the wrong person's money.
+
+### Sheet against database
+
+Compares your sheet's Hostlyft income, month by month, against what Stripe and
+Wise actually reported. It **reports** disagreement and stops — it never resolves
+it. Neither record is automatically right: the sheet holds decisions the bank
+can't see, and the bank holds transactions that may not have been typed in yet.
+
+**Single months are expected to differ.** The database records income in the month
+the money *arrived*; your sheet records it against the month it was *for*. An
+invoice raised in one month and paid the next lands in different months in the two
+records without either being wrong. **The year total is the comparison that
+means something.**
+
+### What it refuses to guess
+
+Payout rows labelled only `Olaniyan (subcontractor)` are reported, not attributed.
+Two people on the roster share that surname, and crediting the row to the wrong one
+would move somebody's $600 threshold.
+
+---
+
 ## Reminders
 
 Nothing is on a timer yet. Every alert is run by hand and works out for itself
@@ -580,17 +632,11 @@ Each migration step is written so running it twice is harmless. Back up first �
 | 8 | Categorization | ✅ done |
 | 9 | Tax calculator (both businesses combined) | ✅ done |
 | 10 | Reminders — quarterly, FBAR, jars, contractor alarm | ✅ done |
-| 11 | Google tax sheet (separate, cash-received) | ⚠️ partly — see below |
+| 11 | Google tax sheet + reconciliation | ✅ done |
 | 12 | Contractor forms tracker (W-9 / W-8BEN) | ✅ done |
 | 12b | Home office, travel, meals, equipment deductions | not started |
 | 13 | Scheduling + migration to the main Mac | not started |
 
-**Stage 11 is not finished.** It writes Summary, Income, Expenses, Excluded, Jars,
-Review and the monthly tabs. The **Reconciliation** view the plan asks for — per
-person, cumulative *earned* against withdrawn and the jar balance, with the gap —
-was never built, and neither was the sheet-vs-database disagreement check. The
-`contractor_ledger` table that would hold "earned" is empty. Withdrawn and in-jar
-are covered; the earned side is not.
 
 Currency conversion (Stage 5) deliberately comes before Wise (Stage 6): Wise
 holds several currencies at once, so the converter has to exist first.

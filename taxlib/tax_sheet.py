@@ -34,7 +34,7 @@ WHY EVERY ROW CARRIES ITS SOURCE ID
 
 import datetime as dt
 
-from taxlib import config, db, gsheets
+from taxlib import config, db, gsheets, reconcile
 from taxlib.sheet_style import Tab, format_requests
 
 
@@ -144,10 +144,25 @@ def collect(connection, year):
     jars = db.latest_jar_balances(connection)
     contractors = db.contractor_totals(connection, year)
 
+    # Reading her accounting sheet needs the network, and the tax sheet
+    # must still build without it. A failure here costs the two
+    # reconciliation tabs, not the whole run - but it is reported rather
+    # than leaving empty tabs that look like "nothing to reconcile".
+    reconciliation, checks, checks_summary, recon_error = [], [], {}, None
+    try:
+        months = reconcile.read_sheet(year)
+        reconciliation = reconcile.per_person(connection, year, months=months)
+        checks = reconcile.sheet_vs_database(connection, year, months=months)
+        checks_summary = reconcile.summarise(checks)
+    except Exception as problem:          # noqa: BLE001 - reported, not raised
+        recon_error = str(problem)
+
     return {"totals": totals, "hostlyft": hostlyft, "marcus": marcus,
             "income": income, "expenses": expenses, "excluded": excluded,
             "review": review, "by_category": by_category, "by_month": by_month,
-            "jars": jars, "contractors": contractors}
+            "jars": jars, "contractors": contractors,
+            "reconciliation": reconciliation, "checks": checks,
+            "checks_summary": checks_summary, "recon_error": recon_error}
 
 
 # ===========================================================================
@@ -434,6 +449,118 @@ def build_all(connection, year, built_on):
     if not data["review"]:
         review.row("nothing needs attention")
     tabs["Review"] = review
+
+    # ---------------------------------------------------- Reconciliation
+    # The three numbers the plan insists are never confused with each
+    # other, per person, as running totals for the year.
+    recon = Tab(money_columns=[1, 2, 3, 4])
+    recon.title(f"Reconciliation {year} - earned, withdrawn, still in the jar")
+    recon.note("Running totals for the whole year, not month by month. "
+               "Monthly mismatches are expected: payouts lag income by a "
+               "month, so a single month rarely balances and the noise "
+               "hides the real gaps.")
+    recon.note("EARNED comes from your own sheet's split calculation - it is "
+               "read, never recalculated here. WITHDRAWN and IN JAR come "
+               "from Wise.")
+    recon.blank()
+
+    if data["recon_error"]:
+        recon.warn("Your accounting sheet could not be read, so the earned "
+                   "column is missing.")
+        recon.warn(data["recon_error"][:400])
+        recon.note("The withdrawal and jar figures below still come from "
+                   "the database and are correct.")
+        recon.blank()
+
+    recon.head("Person", "Earned", "Withdrawn", "Still in jar", "Gap")
+    for row in data["reconciliation"]:
+        gap = row["gap_usd"]
+        cells = (
+            row["person"],
+            money(row["earned_usd"]) if row["in_sheet"] else "not in sheet",
+            money(row["withdrawn_usd"]),
+            money(row["in_jar_usd"]),
+            money(gap) if gap is not None else "-",
+        )
+        # Flag anything that does not reconcile, and anyone the sheet's
+        # split calculation never mentions.
+        unusual = (not row["in_sheet"]) or (gap is not None and abs(gap) >= 1)
+        (recon.warn if unusual else recon.row)(*cells)
+    recon.blank()
+
+    recon.note("GAP = earned - withdrawn - still in jar.")
+    recon.note("A POSITIVE gap means they have earned money that has "
+               "neither been paid to them nor set aside for them.")
+    recon.note("A NEGATIVE gap means more has been paid or reserved than "
+               "the sheet says they earned.")
+    recon.blank()
+    recon.note("Only WITHDRAWN is a tax deduction. Money in a jar is a "
+               "label inside your own Wise account - it has not been paid "
+               "to anyone, and it does not count toward the $600 that "
+               "triggers a 1099.")
+    recon.note("Liuba is shown because she has a jar and the totals would "
+               "not add up without her. Her draws are NOT a deductible "
+               "expense - they are owner's draws.")
+    tabs["Reconciliation"] = recon
+
+    # ------------------------------------------------------------ Checks
+    checks_data = data["checks"]
+    summary = data["checks_summary"]
+
+    checks = Tab(money_columns=[1, 2, 3])
+    checks.title(f"Sheet against database - {year}")
+    checks.note("Your accounting sheet against what Stripe and Wise "
+                "actually reported. Neither is automatically right: the "
+                "sheet holds decisions the bank cannot see, and the bank "
+                "holds transactions that may not have been typed in yet.")
+    checks.note("This reports disagreement. It does not resolve it - "
+                "quietly overwriting one with the other would destroy the "
+                "only signal that something needs looking at.")
+    checks.blank()
+
+    if data["recon_error"]:
+        checks.warn("Your accounting sheet could not be read, so there is "
+                    "nothing to compare against.")
+        checks.warn(data["recon_error"][:400])
+        checks.note("This is not a clean bill of health - the check did not "
+                    "run. Fix the connection and build the sheet again.")
+        checks.blank()
+
+    checks.head("Month", "Sheet USD", "Database USD", "Difference", "Agrees?")
+    for row in checks_data:
+        cells = (row["month"], money(row["sheet_usd"]),
+                 money(row["database_usd"]), money(row["difference_usd"]),
+                 "yes" if row["agrees"] else "NO")
+        (checks.row if row["agrees"] else checks.warn)(*cells)
+    if summary:
+        checks.total("YEAR", money(summary["sheet_usd"]),
+                     money(summary["database_usd"]),
+                     money(summary["difference_usd"]), "")
+    checks.blank()
+
+    checks.section("WHY THE MONTHS DISAGREE EVEN WHEN THE YEAR NEARLY AGREES")
+    checks.note("The database records income in the month the money "
+                "ARRIVED. Your sheet records it against the month it was "
+                "for. An invoice raised in one month and paid in the next "
+                "lands in different months in the two records, without "
+                "either being wrong.")
+    checks.note("So the year total is the meaningful comparison. A month "
+                "that disagrees is worth a glance; a YEAR that disagrees "
+                "means something is genuinely missing.")
+    checks.blank()
+
+    if summary and summary["unmatched_payouts"]:
+        checks.section("PAYOUT ROWS THAT COULD NOT BE ATTRIBUTED")
+        checks.note("Two people on the roster share the surname Olaniyan, "
+                    "so a row labelled only with a surname is reported "
+                    "rather than guessed. Crediting it to the wrong person "
+                    "would move somebody's $600 threshold.")
+        checks.head("Month", "Row in your sheet", "USD", "", "")
+        for entry in summary["unmatched_payouts"]:
+            checks.warn(entry["month"], entry["label"],
+                        money(entry["amounts"].get("USD", 0)), "", "")
+        checks.blank()
+    tabs["Checks"] = checks
 
     return tabs, data
 
