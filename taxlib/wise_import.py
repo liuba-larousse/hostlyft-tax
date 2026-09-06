@@ -116,13 +116,41 @@ CARD_REPAYMENTS = ["CAPITAL ONE", "CAPITALONE"]
 MATCH_WINDOW_DAYS = 45
 
 
-# Categories in rules.txt that are unambiguously a business cost. Travel and
-# taxes are excluded on purpose: a flight or a tax payment on a personal card
-# is far more likely to be personal, and guessing wrong means reading and
-# storing something private.
+# Categories in rules.txt that may be read from the PERSONAL account.
+#
+# This is a whitelist, and it is deliberately short. Everything not named
+# here is discarded before it is stored, printed or logged - which is what
+# keeps ordinary personal spending out of the database entirely.
+#
+# TRAVEL AND MEALS WERE ADDED ON 6 SEPTEMBER 2026, AT HER EXPLICIT REQUEST.
+# They were excluded before, on the reasoning that a flight or a restaurant
+# on a personal card is more likely to be personal than business. She has
+# said that all travel and all restaurant charges on both accounts are
+# business, so they are now read.
+#
+# That instruction decides what gets READ. It cannot decide what is
+# DEDUCTIBLE, because two of the tests are things no bank row can answer:
+#   - travel is deductible only when away from her tax home (France);
+#     commuting never is, and a mixed trip counts only for the business part
+#   - a meal needs a business purpose and the people present recorded, and
+#     is 50% deductible at most
+# So every row from here lands with needs_review set, and is confirmed one
+# at a time rather than by a blanket rule.
 PERSONAL_ALLOWED_CATEGORIES = {
     "software", "phone and internet", "compliance and admin",
     "professional services", "advertising", "payment processing",
+    "travel", "meals",
+}
+
+# The subset that cannot be taken at face value even once it is read, and
+# why - shown to her on each row rather than assumed to be remembered.
+PERSONAL_NEEDS_CONFIRMING = {
+    "travel": ("deductible only if this trip was away from your tax home "
+               "in France on business - commuting and the personal part of "
+               "a mixed trip do not count"),
+    "meals": ("a business meal needs the business purpose and who was "
+              "present; only 50% is deductible, and a meal on your own "
+              "near home is personal"),
 }
 
 
@@ -693,10 +721,13 @@ def build_records(connection, transactions, *, profile_label, business,
                     "vendor": _cat.tidy_vendor(None, description, matched_word),
                     "description": description[:200],
                     "needs_review": True,
-                    "review_note": (f"business subscription paid from the "
-                                    f"personal card, matched on "
-                                    f"'{matched_word}' - confirm it was for "
-                                    f"Hostlyft and not personal use"),
+                    "review_note": (
+                        f"personal account, matched on '{matched_word}' - "
+                        f"{PERSONAL_NEEDS_CONFIRMING[category]}"
+                        if category in PERSONAL_NEEDS_CONFIRMING else
+                        f"business subscription paid from the personal "
+                        f"card, matched on '{matched_word}' - confirm it "
+                        f"was for Hostlyft and not personal use"),
                 })
                 continue
 
