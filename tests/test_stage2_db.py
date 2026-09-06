@@ -13,7 +13,7 @@ The two that matter most:
 
 import pytest
 
-from taxlib import db
+from taxlib import config, db
 
 
 @pytest.fixture
@@ -350,11 +350,14 @@ def test_contractor_totals_count_withdrawals_per_person(conn):
 
     figures = db.contractor_totals(conn, 2026)
 
-    # 350 as "Ayoka" plus 300 as "Yetunde Olaniyan" is one person, over $600
+    # 350 as "Ayoka" plus 300 as "Yetunde Olaniyan" is one person
     assert figures["Yetunde Olaniyan"]["withdrawn_usd"] == 650.00
     assert figures["Yetunde Olaniyan"]["withdrawals"] == 2
-    assert figures["Yetunde Olaniyan"]["over_600"] is True
-    # but not a US person, so no 1099
+    # Not a US person, so no 1099 - and no $600 threshold at all. The
+    # question does not apply to her, which is why it is None and not
+    # False: "over_600: False" on someone paid $650 would be misleading.
+    assert figures["Yetunde Olaniyan"]["threshold_applies"] is False
+    assert figures["Yetunde Olaniyan"]["over_600"] is None
     assert figures["Yetunde Olaniyan"]["needs_1099"] is False
 
     assert figures["Evgeniya Dyatlovskaya"]["withdrawn_usd"] == 100.00
@@ -373,6 +376,36 @@ def test_only_katerina_triggers_a_1099_at_600(conn):
     assert figures["Katerina Mrvova"]["form"] == "W-9"
     assert figures["Yetunde Olaniyan"]["needs_1099"] is False
     assert figures["Yetunde Olaniyan"]["form"] == "W-8BEN"
+
+
+def test_the_600_threshold_applies_only_to_the_us_person(conn):
+    """
+    $600 is the 1099-NEC filing threshold, and a 1099-NEC reports payments
+    to US persons. Work done abroad by a foreign person is foreign-source
+    income: no 1099, no 1042-S, no withholding, and so no threshold of any
+    size. Only Katerina has one.
+    """
+    for index, person in enumerate(config.CONTRACTORS):
+        db.upsert_expense(conn, source="wise", source_id=f"big{index}",
+                          date="2026-05-01", amount=9000, currency="USD",
+                          amount_usd=9000, vendor=person["name"],
+                          category="contractor")
+    conn.commit()
+
+    figures = db.contractor_totals(conn, 2026)
+    applies = [name for name, row in figures.items()
+               if row["threshold_applies"]]
+    assert applies == ["Katerina Mrvova"]
+
+    # Everyone else is far past $600 and still has no threshold to cross.
+    for name, row in figures.items():
+        if name == "Katerina Mrvova":
+            assert row["over_600"] is True
+            assert row["needs_1099"] is True
+        else:
+            assert row["withdrawn_usd"] == 9000.00
+            assert row["over_600"] is None
+            assert row["needs_1099"] is False
 
 
 def test_a_jar_allocation_never_counts_toward_the_600_threshold(conn):
@@ -396,7 +429,6 @@ def test_a_jar_allocation_never_counts_toward_the_600_threshold(conn):
 
     figures = db.contractor_totals(conn, 2026)
     assert figures["Yetunde Olaniyan"]["withdrawn_usd"] == 400.00
-    assert figures["Yetunde Olaniyan"]["over_600"] is False
 
     # and the jar money is not an expense at all
     assert db.totals(conn, 2026)["expenses_usd"] == 400.00

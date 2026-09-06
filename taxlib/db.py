@@ -1051,14 +1051,35 @@ def contractor_totals(connection, tax_year, people=None):
         ).fetchone()
 
         withdrawn = round_money(row["usd"])
+
+        # THE $600 THRESHOLD ONLY EXISTS FOR A US PERSON.
+        #
+        # It is the Form 1099-NEC filing threshold, and 1099-NEC reports
+        # payments to US persons. For a non-US person doing the work
+        # outside the United States, the payment is foreign-source income
+        # (IRC 861(a)(3) sources personal services by WHERE THE WORK IS
+        # DONE). Foreign-source income paid to a foreign person is not
+        # reportable on a 1099-NEC, is not reportable on a 1042-S, and is
+        # not subject to withholding - so there is no dollar threshold of
+        # any kind to cross.
+        #
+        # Tracking "$600" against them would invent an obligation that
+        # does not exist and imply a deadline that is not real. What they
+        # need is a W-8BEN on file, from the first dollar, which Stage 12
+        # tracks separately and without any threshold.
+        #
+        # None, not False: the question does not apply, which is a
+        # different fact from the answer being no. Someone paid $5,470
+        # showing "over_600: False" would be actively misleading.
+        threshold_applies = bool(person["issues_1099"])
         result[person["name"]] = {
             "person": person,
             "withdrawn_usd": withdrawn,
             "withdrawals": row["n"],
             "latest_withdrawal": row["latest"],
-            # The $600 test. Withdrawals only.
-            "over_600": withdrawn >= 600,
-            "needs_1099": person["issues_1099"] and withdrawn >= 600,
+            "threshold_applies": threshold_applies,
+            "over_600": (withdrawn >= 600) if threshold_applies else None,
+            "needs_1099": threshold_applies and withdrawn >= 600,
             "form": person["form"],
         }
 

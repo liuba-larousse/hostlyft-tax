@@ -415,6 +415,29 @@ A form being *required* and a form being *on file* are different facts. The rost
 knows the first; only this stage records the second, so it needs its own table
 rather than a column bolted onto the roster.
 
+**The $600 threshold is tracked for Katerina ONLY — she asked, and it is correct.**
+Not a higher threshold for the other four: *none at all.* $600 is the Form 1099-NEC
+filing threshold, and a 1099-NEC reports payments to **US persons**. Payment for
+personal services is sourced by **where the work is done** (IRC §861(a)(3)), so work
+performed abroad by a non-US person is **foreign-source** income — not reportable on
+a 1099-NEC, not reportable on a 1042-S, and not subject to withholding. There is no
+amount at which anything begins.
+
+Tracking $600 against them would invent an obligation that does not exist and imply
+a January deadline that is not real. They are tracked on one question instead — is
+the W-8BEN on file and current — which has **no threshold and applies from the first
+dollar**. Do not reintroduce a threshold for them.
+
+In the code this is `threshold_applies`, and `over_600` is **None** rather than
+False for the four: the question does not apply, which is a different fact from the
+answer being no. Someone paid $5,470 reading "over_600: False" would be misleading.
+
+*One caveat, to recognise rather than act on:* this holds because the work is done
+outside the United States. If a foreign contractor performed services while
+physically **in** the US, that portion becomes US-source and a different regime
+applies (Form 1042-S, withholding unless a treaty says otherwise). Nothing suggests
+this has happened.
+
 ### Stage 12b — The rest of the deductions (home office, travel, meals, equipment)
 
 **She asked for this explicitly, reversing the earlier "out of scope" decision.**

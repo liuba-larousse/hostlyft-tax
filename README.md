@@ -597,6 +597,23 @@ owed from the first dollar, with no threshold. The 1099 applies only to Katerina
 and only past $600 of withdrawals. Being under $600 removes the 1099, never the
 form — the form is what establishes no 1099 is owed.
 
+### The $600 threshold is Katerina's alone
+
+Not a higher threshold for the other four — **none at all.** $600 is the 1099-NEC
+filing threshold, and a 1099-NEC reports payments to **US persons**. Payment for
+services is sourced by *where the work is done*, so work performed abroad by a
+non-US person is foreign-source income: no 1099-NEC, no 1042-S, no withholding, and
+no amount at which anything starts.
+
+So the four foreign contractors are tracked on one question — **is the W-8BEN on
+file and current** — which has no threshold and applies from the first dollar. A
+missing W-8BEN on someone paid $5,470 is serious, but it is a missing form, not a
+crossed line with a January deadline, and the tool no longer describes it as one.
+
+The caveat, worth recognising rather than acting on: this holds because the work is
+done outside the US. Services performed *inside* the US become US-source and fall
+under different rules.
+
 ---
 
 ## Upgrading the database

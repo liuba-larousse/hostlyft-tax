@@ -22,6 +22,32 @@ Confusing the two is the easy mistake: it is tempting to think nobody under
 $600 needs anything. The opposite is true - the form is what establishes
 that no 1099 is owed in the first place.
 
+THERE IS NO $600 THRESHOLD FOR THE FOREIGN CONTRACTORS - NOT A HIGHER ONE,
+NONE AT ALL
+
+$600 is the Form 1099-NEC filing threshold, and a 1099-NEC reports payments
+to US persons. For a non-US person doing the work outside the United States
+the payment is FOREIGN-SOURCE income - IRC 861(a)(3) sources payment for
+personal services by where the work is performed, not by who pays for it.
+Foreign-source income paid to a foreign person is not reported on a
+1099-NEC, is not reported on a 1042-S, and carries no withholding. So there
+is no amount at which anything starts.
+
+Katerina is the exception because she is a US citizen. US citizenship, not
+where she lives or what else she holds, is what makes her a US person.
+
+Tracking $600 against the other four would invent an obligation that does
+not exist and imply a January deadline that is not real. They are tracked
+on ONE question - is the W-8BEN on file, and is it current - which has no
+threshold and applies from the first dollar.
+
+ONE CAVEAT, worth knowing rather than acting on: this holds because the
+work is done outside the United States. If a foreign contractor performed
+services while physically IN the US, that part becomes US-source and a
+different regime applies (Form 1042-S, and withholding unless a treaty
+says otherwise). Nothing here suggests that has happened; it is written
+down so a change of circumstances is recognised rather than missed.
+
 WHY A W-8BEN IS THE ONE THAT LAPSES
 
 A W-9 is good until something about the person changes. A W-8BEN expires on
@@ -91,10 +117,13 @@ def review(connection, tax_year=None, today=None):
 
         # ---------------------------------------------------------- the form
         if record is None or not record["received"]:
-            # No form. How bad depends on whether the 1099 line has been
-            # crossed - not on whether one is owed, since the form is what
-            # settles that question either way.
-            status = "missing_over_600" if withdrawn >= 600 else "missing"
+            # No form. The $600 line only escalates this for someone a 1099
+            # could actually be owed for - see the note at the top of the
+            # file on why foreign contractors have no threshold at all.
+            # Bigger payments still sort higher; they just are not
+            # described as having crossed anything.
+            over_line = paid.get("threshold_applies") and withdrawn >= 600
+            status = "missing_over_600" if over_line else "missing"
             problems.append(f"No {required} on file.")
         else:
             on_file = record["form_type"]
@@ -141,6 +170,8 @@ def review(connection, tax_year=None, today=None):
                 f"even though withdrawals are ${withdrawn:,.2f}.")
 
         # ------------------------------------------------------- the 1099
+        # Guarded by issues_1099 first: the threshold is only a question
+        # for someone a 1099-NEC could be owed for at all.
         needs_1099 = bool(person["issues_1099"] and withdrawn >= 600)
         if needs_1099:
             problems.append(

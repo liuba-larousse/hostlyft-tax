@@ -265,3 +265,61 @@ def test_the_worst_problem_is_listed_first(conn):
     pay(conn, "Sunniva Texe", 10)
     rows = forms.review(conn, 2026, today="2026-09-06")
     assert rows[0]["person"] == "Katerina Mrvova"
+
+
+# ---------------------------------------------------------------------------
+#  The $600 threshold belongs to one person only
+# ---------------------------------------------------------------------------
+
+def test_a_foreign_contractor_over_600_has_not_crossed_anything(conn):
+    """
+    $600 is the 1099-NEC threshold and a 1099-NEC reports payments to US
+    persons. Work done abroad by a foreign person is foreign-source income:
+    no 1099, no 1042-S, no withholding, no threshold at any amount.
+
+    So a missing W-8BEN on someone paid $9,000 is still just a missing
+    form - serious, but not a crossed line with a January deadline.
+    """
+    pay(conn, "Olaide Olaniyan", 9000)
+    row = row_for(forms.review(conn, 2026, today="2026-09-06"),
+                  "Olaide Olaniyan")
+
+    assert row["status"] == "missing"          # not "missing_over_600"
+    assert row["needs_1099"] is False
+    joined = " ".join(row["problems"])
+    assert "600" not in joined
+    assert "1099" not in joined
+
+
+def test_katerina_over_600_with_no_form_is_the_escalated_case(conn):
+    """The one person for whom the threshold is real."""
+    pay(conn, "Katerina Mrvova", 9000)
+    row = row_for(forms.review(conn, 2026, today="2026-09-06"),
+                  "Katerina Mrvova")
+    assert row["status"] == "missing_over_600"
+    assert row["needs_1099"] is True
+
+
+def test_no_foreign_contractor_ever_produces_a_600_alert(conn):
+    """Even paid far more than Katerina, they raise no threshold alarm."""
+    from taxlib import alerts
+    from datetime import date
+
+    for name in ["Yetunde Olaniyan", "Olaide Olaniyan",
+                 "Evgeniya Dyatlovskaya", "Sunniva Texe"]:
+        pay(conn, name, 9000)
+
+    raised = alerts.contractor_600_alerts(conn, date(2026, 9, 6), 2026)
+    assert raised == []
+
+
+def test_the_form_is_still_chased_with_no_threshold_involved(conn):
+    """
+    Removing the threshold must not remove the form. It is owed from the
+    first dollar - that is the whole point of it having no threshold.
+    """
+    pay(conn, "Olaide Olaniyan", 5)
+    row = row_for(forms.review(conn, 2026, today="2026-09-06"),
+                  "Olaide Olaniyan")
+    assert row["ok"] is False
+    assert "No W-8BEN on file" in " ".join(row["problems"])
