@@ -293,16 +293,43 @@ class TestPersonalAccountWhitelist:
     On the real account that means 4 matches out of 542 outgoing payments.
     """
 
-    def test_only_business_categories_are_allowed_through(self):
+    def test_only_whitelisted_categories_are_allowed_through(self):
         from taxlib import wise_import
         allowed = wise_import.PERSONAL_ALLOWED_CATEGORIES
         assert "software" in allowed
         assert "payment processing" in allowed
-        # travel and taxes are deliberately excluded: a flight or a tax
-        # payment on a personal card is far more likely to be personal, and
-        # guessing wrong means storing something private
-        assert "travel" not in allowed
+
+        # Travel and meals were added on 6 September 2026 at her explicit
+        # request. Taxes stay out - a tax payment on a personal card is far
+        # more likely to be personal, and she has not asked for it.
+        assert "travel" in allowed
+        assert "meals" in allowed
         assert "taxes and licences" not in allowed
+
+    def test_the_whitelist_is_still_short(self):
+        """
+        The privacy guarantee is the shortness of this list, not the code
+        around it. If it ever grows to cover most spending, the personal
+        account is effectively being read in full - which is the thing she
+        originally said must not happen.
+        """
+        from taxlib import categorize, wise_import
+        every_category = {name for name, _ in categorize.load_rules()}
+        allowed = wise_import.PERSONAL_ALLOWED_CATEGORIES
+        assert allowed < every_category
+        assert len(allowed) <= len(every_category) - 3
+
+    def test_travel_and_meals_are_flagged_rather_than_trusted(self):
+        """
+        Reading them is her decision. Whether they are DEDUCTIBLE is not
+        something a card row can settle, so each carries its own reason to
+        confirm.
+        """
+        from taxlib import wise_import
+        for category in ("travel", "meals"):
+            assert category in wise_import.PERSONAL_NEEDS_CONFIRMING
+        assert "50%" in wise_import.PERSONAL_NEEDS_CONFIRMING["meals"]
+        assert "commuting" in wise_import.PERSONAL_NEEDS_CONFIRMING["travel"]
 
     def test_a_known_business_vendor_is_recognised(self):
         from taxlib import wise_import
