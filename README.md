@@ -442,6 +442,7 @@ costs about $1,224** in real tax. Stage 10 warns from 1 December.
 |---|---|---|---|---|
 | Katerina Mrvova | — | **US citizen** | **W-9** | **yes, at $600** |
 | Yetunde Olaniyan | Ayoka | not a US person | W-8BEN | no |
+| Olaide Olaniyan | — | not a US person | W-8BEN | no |
 | Evgeniya Dyatlovskaya | Jane | not a US person | W-8BEN | no |
 | Sunniva Texe | — | not a US person | W-8BEN | no |
 
@@ -456,6 +457,93 @@ Katerina's US-person status is written as a fixed fact rather than a setting, an
 a test pins it. US citizenship decides it; dual nationality and living abroad
 don't change it, and a US citizen cannot sign a W-8BEN because that form
 certifies foreign status. A missing W-9 TIN triggers 24% backup withholding.
+
+---
+
+## Reminders
+
+Nothing is on a timer yet. Every alert is run by hand and works out for itself
+whether today is the day. Putting it on a schedule is Stage 13, on the main Mac.
+
+```
+python scripts/check_alerts.py --dry-run      # what would be sent. Sends nothing.
+python scripts/check_alerts.py                # actually send
+python scripts/check_alerts.py --test-notify  # prove both channels work
+python scripts/check_alerts.py --on 2026-12-01 --dry-run   # pretend it's December
+```
+
+Five things can raise an alert:
+
+| Alert | When |
+|---|---|
+| Quarterly estimated tax | the 7 days before 15 Apr, 15 Jun, 15 Sep, 15 Jan |
+| FBAR | late March, and again in early October |
+| Money still in jars | any day in December |
+| $600 contractor threshold | as soon as withdrawals cross it |
+| Missing W-9 / W-8BEN | any day one is missing, wrong or expired |
+
+**Each is sent once**, recorded in `alerts_sent`, and not repeated. A run that
+says nothing needs you is the normal result — that silence is what makes the
+noisy days worth reading. `--force` sends again anyway.
+
+**A failed send is not recorded as sent.** If the Mac is offline the alert stays
+pending and goes out on the next run, rather than being marked done and never
+seen.
+
+### Two ways it reaches you, on purpose
+
+A desktop notification you saw and forgot is the same as one you never saw, so
+anything that matters also goes to email. Email needs a Gmail **app password** —
+not your Gmail password, which Google no longer accepts from programs. Turn on
+2-Step Verification first (app passwords don't exist without it), then create one
+at https://myaccount.google.com/apppasswords and put it in `tax/.env` as
+`GMAIL_APP_PASSWORD`.
+
+**`osascript` reporting success does not prove a notification appeared.** If
+Terminal has never been granted notification permission, macOS discards it
+silently and reports success anyway. System Settings → Notifications → Terminal →
+Allow Notifications. This is a real macOS behaviour, and it is why the desktop
+channel is never used alone.
+
+### What the FBAR alert deliberately will not tell you
+
+FBAR asks whether **all** your foreign accounts **combined** ever topped $10,000
+at **any moment** in the year. This database holds jar balances on the handful of
+days a sync ran, and does not hold your main Wise operating balance at all — so it
+cannot answer that. The alert says so plainly and sends you to your Wise
+statements. A confident "you're under the limit" from this data would be a wrong
+answer about something carrying criminal penalties.
+
+---
+
+## Contractor forms
+
+```
+python scripts/check_forms.py                          # where everyone stands
+python scripts/check_forms.py --received "Katerina Mrvova" --on 2026-09-10 --tin
+python scripts/check_forms.py --received "Yetunde Olaniyan" --on 2026-09-10
+python scripts/check_forms.py --not-received "Sunniva Texe"    # undo
+```
+
+**Which form somebody needs is not set here.** That comes from the roster in
+`taxlib/config.py`, which records why each person is treated as they are. This
+only records whether the form has actually arrived.
+
+Three things this catches that "did the form come back?" alone would miss:
+
+- **A W-8BEN expires.** It is valid until the last day of the third calendar year
+  after signing — one signed in June 2026 lapses on 31 December 2029. An expired
+  form is worth no more than a missing one, and nothing else would notice. The
+  expiry date is worked out for you; you never type it.
+- **A W-9 without a taxpayer ID number** is on file but not usable — 24% backup
+  withholding still applies. Recorded separately from "received" for that reason.
+- **The wrong form.** A US citizen signing a W-8BEN is not merely unhelpful; that
+  form certifies *foreign* status.
+
+**Collecting the form and issuing a 1099 are different obligations.** The form is
+owed from the first dollar, with no threshold. The 1099 applies only to Katerina,
+and only past $600 of withdrawals. Being under $600 removes the 1099, never the
+form — the form is what establishes no 1099 is owed.
 
 ---
 
@@ -491,10 +579,18 @@ Each migration step is written so running it twice is harmless. Back up first �
 | 7 | File imports — Capital One, HubSpot, Upwork | ✅ done |
 | 8 | Categorization | ✅ done |
 | 9 | Tax calculator (both businesses combined) | ✅ done |
-| 10 | Reminders — quarterly, FBAR, jars, contractor alarm | not started |
-| 11 | Google tax sheet (separate, cash-received) | ✅ done |
-| 12 | Contractor forms tracker (W-9 / W-8BEN) | not started |
+| 10 | Reminders — quarterly, FBAR, jars, contractor alarm | ✅ done |
+| 11 | Google tax sheet (separate, cash-received) | ⚠️ partly — see below |
+| 12 | Contractor forms tracker (W-9 / W-8BEN) | ✅ done |
+| 12b | Home office, travel, meals, equipment deductions | not started |
 | 13 | Scheduling + migration to the main Mac | not started |
+
+**Stage 11 is not finished.** It writes Summary, Income, Expenses, Excluded, Jars,
+Review and the monthly tabs. The **Reconciliation** view the plan asks for — per
+person, cumulative *earned* against withdrawn and the jar balance, with the gap —
+was never built, and neither was the sheet-vs-database disagreement check. The
+`contractor_ledger` table that would hold "earned" is empty. Withdrawn and in-jar
+are covered; the earned side is not.
 
 Currency conversion (Stage 5) deliberately comes before Wise (Stage 6): Wise
 holds several currencies at once, so the converter has to exist first.

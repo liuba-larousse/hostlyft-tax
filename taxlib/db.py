@@ -91,7 +91,8 @@ from taxlib import config
 #   2  + business column on income and expenses (hostlyft | marcus)
 #      + wise_jars, contractor_ledger
 #   3  + jar_movements: money moved INTO and OUT OF each jar
-SCHEMA_VERSION = 3
+#   4  + contractor_forms: whether each person's W-9 or W-8BEN is on file
+SCHEMA_VERSION = 4
 
 
 # ===========================================================================
@@ -454,6 +455,51 @@ CREATE TABLE IF NOT EXISTS contractor_ledger (
 );
 
 
+-- -------------------------------------------------------- contractor_forms
+-- Whether the tax form each team member owes has actually been RECEIVED.
+--
+-- The roster in config.py knows which form each person NEEDS. That is a
+-- different fact from whether it is sitting in a folder, and only this
+-- table records the second one. Keeping them apart matters: the roster is
+-- a decision about someone's tax status and should not be edited casually,
+-- while this table changes every time a form arrives.
+--
+-- WHY `expires_on` EXISTS
+--   A W-9 does not expire. A W-8BEN does: it is valid from the day it is
+--   signed until the last day of the THIRD following calendar year. One
+--   signed in June 2026 lapses on 31 December 2029. An expired W-8BEN is
+--   worth no more than a missing one, and nothing else in this system
+--   would ever notice, which is exactly why it is stored rather than
+--   remembered.
+--
+-- WHY `has_tin` EXISTS SEPARATELY FROM `received`
+--   A W-9 that arrives without a taxpayer ID number does not do its job:
+--   payments become subject to 24% backup withholding. So "the form came
+--   back" and "the form is usable" are two different questions.
+CREATE TABLE IF NOT EXISTS contractor_forms (
+    id                INTEGER PRIMARY KEY,
+
+    -- the canonical full name, matching the roster in config.py
+    person            TEXT    NOT NULL UNIQUE,
+
+    -- 'W-9' or 'W-8BEN'. Stored as well as looked up, so the record shows
+    -- which form was actually collected rather than which one is owed now.
+    form_type         TEXT    NOT NULL,
+
+    received          INTEGER NOT NULL DEFAULT 0,   -- 0 = no, 1 = yes
+    received_on       TEXT,                          -- YYYY-MM-DD
+    expires_on        TEXT,                          -- W-8BEN only; NULL for W-9
+
+    -- W-9 only. 0 on a received W-9 means backup withholding applies.
+    has_tin           INTEGER NOT NULL DEFAULT 0,
+
+    notes             TEXT,
+
+    created_at        TEXT    NOT NULL,
+    updated_at        TEXT    NOT NULL
+);
+
+
 -- ------------------------------------------------------------------- meta
 -- Internal bookkeeping: which version of the layout above this file uses.
 CREATE TABLE IF NOT EXISTS meta (
@@ -529,10 +575,28 @@ def _migrate_1_to_2(connection):
     return changes
 
 
+def _migrate_3_to_4(connection):
+    """
+    Version 3 -> 4.
+
+    Adds contractor_forms. It is a brand new table, so the CREATE TABLE in
+    the schema above has already built it by the time anything reads it -
+    there is nothing to copy across and no existing row to change.
+
+    Deliberately NOT pre-filled with a row per person. An empty table means
+    "no form has been recorded for anybody", which is the truthful starting
+    position. Writing rows here that say `received = 0` would look identical
+    but invites the opposite reading - that someone checked and found them
+    missing.
+    """
+    return ["added contractor_forms (whether each W-9 / W-8BEN is on file)"]
+
+
 # version to reach -> the function that gets there
 MIGRATIONS = {
     2: _migrate_1_to_2,
     3: _migrate_2_to_3,
+    4: _migrate_3_to_4,
 }
 
 
@@ -999,6 +1063,87 @@ def contractor_totals(connection, tax_year, people=None):
         }
 
     return result
+
+
+# ===========================================================================
+#  CONTRACTOR FORMS  -  the W-9 / W-8BEN paperwork
+# ===========================================================================
+
+def w8ben_expires_on(received_on):
+    """
+    When a W-8BEN signed on this date stops being valid.
+
+    The rule: valid from the day it is signed until the last day of the
+    THIRD following calendar year. Signed any day in 2026 -> expires
+    2029-12-31. The day and month of signing make no difference, which is
+    why this only reads the year.
+
+    (There is an exception for a W-8BEN carrying a US taxpayer ID number,
+    which can stay valid indefinitely. None of the four foreign contractors
+    here has one, so the plain rule is what gets applied - and the
+    conservative direction of the error is to re-collect a form that was
+    still valid, not to rely on one that lapsed.)
+    """
+    if not received_on:
+        return None
+    year = int(str(received_on)[:4])
+    return f"{year + 3}-12-31"
+
+
+def record_form(connection, *, person, form_type, received=True,
+                received_on=None, has_tin=False, notes=None):
+    """
+    Record that someone's form has come back - or un-record it.
+
+    Re-running with the same person updates that one row rather than adding
+    a second, so this is safe to repeat.
+
+    `expires_on` is worked out here rather than being asked for, because it
+    follows from the signing date by a fixed rule and a hand-typed date
+    would just be somewhere else for it to be wrong.
+    """
+    form_type = (form_type or "").strip()
+    expires_on = (w8ben_expires_on(received_on)
+                  if received and form_type == "W-8BEN" else None)
+
+    # has_tin is only meaningful for a W-9. Forcing it to 0 elsewhere stops
+    # a stray True on a W-8BEN row reading as though a TIN was collected.
+    tin = 1 if (received and form_type == "W-9" and has_tin) else 0
+
+    now = _now()
+    connection.execute(
+        "INSERT INTO contractor_forms "
+        "  (person, form_type, received, received_on, expires_on, has_tin, "
+        "   notes, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(person) DO UPDATE SET "
+        "  form_type = excluded.form_type, "
+        "  received = excluded.received, "
+        "  received_on = excluded.received_on, "
+        "  expires_on = excluded.expires_on, "
+        "  has_tin = excluded.has_tin, "
+        "  notes = excluded.notes, "
+        "  updated_at = excluded.updated_at",
+        (person, form_type, 1 if received else 0, received_on, expires_on,
+         tin, notes, now, now),
+    )
+    return connection.execute(
+        "SELECT * FROM contractor_forms WHERE person = ?", (person,)
+    ).fetchone()
+
+
+def get_form(connection, person):
+    """The stored form record for one person, or None if nothing recorded."""
+    return connection.execute(
+        "SELECT * FROM contractor_forms WHERE person = ? COLLATE NOCASE",
+        (person,),
+    ).fetchone()
+
+
+def all_forms(connection):
+    """Every stored form record, keyed by person."""
+    return {row["person"]: row for row in
+            connection.execute("SELECT * FROM contractor_forms").fetchall()}
 
 
 # ===========================================================================
