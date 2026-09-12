@@ -632,7 +632,7 @@ def fetch_statement(token, profile_id, balance_id, currency, start, end,
 # ===========================================================================
 
 def build_records(connection, transactions, *, profile_label, business,
-                  personal=False, balance_kind="STANDARD"):
+                  personal=False, balance_kind="STANDARD", jar_name=None):
     """
     Turn one balance's transactions into rows for the database.
 
@@ -866,6 +866,53 @@ def build_records(connection, transactions, *, profile_label, business,
                     "description": "Wise transfer fee",
                 })
             continue
+
+        # MONEY SENT STRAIGHT OUT OF A JAR IS THAT PERSON'S PAYOUT.
+        #
+        # Her rule, given 2026-09-12, and it needs no guessing: a transfer
+        # made from a jar appears in THAT JAR'S OWN statement. Jane's jar
+        # shows
+        #     2026-09-10 DEBIT -505.06 TRANSFER-...  Sent money to Snitserev
+        # so the payee's name never has to be recognised at all. Vadim
+        # Snitserev had never been seen before and landed as "uncategorized"
+        # - a lost deduction AND $505.06 missing from Jane's withdrawals,
+        # which is what the $600 threshold and the reconciliation gap are
+        # measured on.
+        #
+        # Matching on the recipient's name can only ever catch people
+        # somebody already added by hand. The jar knows who it belongs to.
+        jar_person = (config.match_contractor(jar_name, strict=False)
+                      if balance_kind == "SAVINGS" and jar_name else None)
+        if jar_person and abs(amount) and (txn.get("type") == "DEBIT"):
+            probe = classify_debit(
+                description=description, details_type=details_type,
+                amount=abs(amount), currency=currency, date=date)
+            if probe["kind"] != "jar_move":
+                expenses.append({
+                    "source": "wise", "source_id": source_id, "date": date,
+                    "amount": abs(amount), "currency": currency,
+                    "business": business,
+                    "amount_usd": abs(amount) if currency == "USD" else None,
+                    "category": db.CATEGORY_CONTRACTOR,
+                    "vendor": jar_person["name"],
+                    "description": description[:200],
+                    "review_note": (
+                        f"paid straight out of the '{jar_name}' jar, so it is "
+                        f"{jar_person['name']}'s payout whoever the transfer "
+                        f"names. Deductible now - it has actually left - and "
+                        f"it counts toward her withdrawals."),
+                })
+                fee = (txn.get("totalFees") or {}).get("value") or 0
+                if fee:
+                    expenses.append({
+                        "source": "wise", "source_id": f"{source_id}:fee",
+                        "date": date, "amount": abs(fee), "currency": currency,
+                        "business": business,
+                        "amount_usd": abs(fee) if currency == "USD" else None,
+                        "category": "bank fees", "vendor": "Wise",
+                        "description": "Wise transfer fee",
+                    })
+                continue
 
         decision = classify_debit(
             description=description, details_type=details_type,

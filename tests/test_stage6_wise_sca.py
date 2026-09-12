@@ -410,3 +410,86 @@ class TestARefundMustNotVanishIntoThePersonalAccount:
         assert wise_import._refund_of_claimed_spending(
             conn, description="Received money from olaide olaniyan joseph",
             amount=306.00, currency="EUR") is None
+
+
+class TestMoneyOutOfAJarIsThatPersonsPayout:
+    """
+    Her rule, given 2026-09-12: money sent straight out of a contractor's jar
+    is that contractor's payout, whoever the transfer is addressed to.
+
+    It needs no guessing, because a transfer made from a jar appears in THAT
+    JAR'S OWN statement. Jane's jar reads:
+
+        2026-09-10 DEBIT -505.06 TRANSFER-...  Sent money to Snitserev Vadim
+
+    Vadim Snitserev had never been seen before, so name-matching left it as
+    "uncategorized" - a lost deduction AND $505.06 missing from Jane's
+    withdrawals, which is what the $600 threshold and the reconciliation gap
+    are both measured on. Matching on the payee's name can only ever catch
+    people somebody already added by hand; the jar already knows whose it is.
+
+    The payee below is deliberately a name NOBODY on the roster answers to.
+    Snitserev has since been added as one of Jane's payment aliases, so using
+    him here would pass through the alias and prove nothing about the jar.
+    """
+
+    STRANGER = [{
+        "type": "DEBIT",
+        "date": "2026-09-10T00:00:00Z",
+        "referenceNumber": "TRANSFER-9999999999",
+        "amount": {"value": -505.06, "currency": "USD"},
+        "details": {"type": "TRANSFER",
+                    "description": "Sent money to Someone Nobody Knows"},
+    }]
+
+    # Every jar movement Wise reports uses details.type CONVERSION - checked
+    # against her live account, 46 of them across both balance kinds.
+    JAR_MOVE = [{
+        "type": "DEBIT",
+        "date": "2026-09-10T00:00:00Z",
+        "referenceNumber": "BALANCE-6049385450",
+        "amount": {"value": -248.00, "currency": "USD"},
+        "details": {"type": "CONVERSION",
+                    "description": "Moved 248.00 USD to GBP"},
+    }]
+
+    @staticmethod
+    def _build(transactions, **kw):
+        from taxlib import db, wise_import
+        conn = db.init_db(":memory:")
+        return wise_import.build_records(
+            conn, transactions, profile_label="hostlyft",
+            business="hostlyft", **kw)
+
+    def test_a_stranger_paid_from_a_jar_is_credited_to_the_jars_owner(self):
+        records = self._build(self.STRANGER, balance_kind="SAVINGS",
+                              jar_name="Jane")
+        expense = records["expenses"][0]
+        assert expense["category"] == "contractor"
+        assert expense["vendor"] == "Evgeniya Dyatlovskaya"
+        assert expense["amount"] == 505.06
+
+    def test_the_same_payment_without_a_jar_is_only_an_unknown_payee(self):
+        """Proves it is the JAR carrying the information, not the name."""
+        records = self._build(self.STRANGER, balance_kind="STANDARD")
+        expense = records["expenses"][0]
+        assert expense["vendor"] != "Evgeniya Dyatlovskaya"
+        assert expense["category"] == "uncategorized"
+
+    def test_a_jar_whose_name_is_not_a_person_credits_nobody(self):
+        """'ADMIN 30%' is a pot, not a contractor."""
+        records = self._build(self.STRANGER, balance_kind="SAVINGS",
+                              jar_name="ADMIN 30%")
+        assert records["expenses"][0]["vendor"] != "Evgeniya Dyatlovskaya"
+        assert records["expenses"][0]["category"] == "uncategorized"
+
+    def test_moving_money_between_balances_is_still_not_a_payout(self):
+        """
+        A jar move is a label change, not a payment. Counted as a payout it
+        would invent a deduction that never happened AND inflate somebody's
+        withdrawals toward the $600 threshold. Seen from the jar side these
+        are DEBITs too, which is exactly why the guard is needed.
+        """
+        records = self._build(self.JAR_MOVE, balance_kind="SAVINGS",
+                              jar_name="Jane")
+        assert records["expenses"] == []

@@ -119,7 +119,7 @@ def main():
 
             records = wise_import.build_records(
                 connection, txns, profile_label=label, business=business,
-                personal=personal, balance_kind=kind)
+                personal=personal, balance_kind=kind, jar_name=jar)
             for key in ("income", "expenses", "notes"):
                 totals[key].extend(records[key])
             totals.setdefault("movements", []).extend(records["jars"])
