@@ -516,3 +516,135 @@ def summarise(checks):
             {"month": row["month"], **entry}
             for row in checks for entry in row["unmatched_payouts"]],
     }
+
+
+# ===========================================================================
+#  THE INDEPENDENT CHECK ON THE SHEET'S SPLIT ARITHMETIC
+# ===========================================================================
+#
+# "Earned" is the one figure in the reconciliation that does not come from a
+# bank, and until now it came from one place only: her hand-maintained
+# monthly tabs. A typo there propagates silently into the gap, the $600
+# threshold and the quarterly distribution.
+#
+# This recomputes it a second way, taking only the RATES from the sheet and
+# the AMOUNTS from the database - so a mistyped figure in a split column
+# shows up as a divergence instead of becoming the truth.
+#
+# WHY THE RATES ARE LEARNED PER CLIENT RATHER THAN ASSUMED
+#     The standard formulas are 0.95 x 0.70 x 0.50 for the Katerina/Ayoka
+#     group and 0.95 x 0.80 for Jane. Not every client follows them:
+#     Chananya splits 0.7192 to Jane and 0.2308 to Ayoka. Assuming the
+#     formula would report a divergence that is really a bespoke deal.
+#
+# WHAT IT CANNOT DO
+#     Sunniva is hourly, not a revenue split, so there is nothing to
+#     recompute for her - only the sheet knows her hours. She is left out
+#     rather than being reported as earning whatever she happens to have
+#     been paid.
+
+# Deliberately NOT called SPLIT_COLUMNS: that name is already taken further
+# up for reading the sheet, and redefining it silently broke parse_month -
+# Liuba vanished from the earnings it returns. Caught by the existing tests.
+CHECK_SPLIT_COLUMNS = {
+    "katerina split": "Katerina Mrvova",
+    "ayoka split": "Yetunde Olaniyan",
+    "evgeniya split": "Evgeniya Dyatlovskaya",
+}
+
+
+def client_split_rates(year, sheet_id=None):
+    """
+    Learn each client's split rates from the sheet's own income rows.
+
+    Returns {client_name: {person: rate}}. A rate is that person's share of
+    the invoice, read from what the sheet actually computed rather than
+    from a formula it is assumed to follow.
+    """
+    sheet_id = sheet_id or gsheets.accounting_sheet_id()
+    sheets = gsheets.service()
+    rates, header = {}, None
+
+    for month in MONTHS:
+        try:
+            values = gsheets.call(sheets.spreadsheets().values().get(
+                spreadsheetId=sheet_id, range=f"'{month} {year}'!A1:H40"),
+                what=f"the {month} tab")["values"]
+        except Exception:
+            continue
+        for raw in values:
+            cells = list(raw) + [""] * 8
+            first = str(cells[0]).strip()
+            if first.lower() == "client":
+                header = [str(c).strip().lower() for c in cells]
+                continue
+            if not header or not first or first.lower().startswith("total"):
+                continue
+            amount = money(cells[2])
+            if amount <= 0:
+                continue
+            for index, label in enumerate(header):
+                person = CHECK_SPLIT_COLUMNS.get(label)
+                if not person:
+                    continue
+                share = money(cells[index])
+                if share:
+                    rates.setdefault(first, {})[person] = share / amount
+    return rates
+
+
+def recomputed_earnings(connection, year, sheet_id=None):
+    """
+    Earned, worked out from the sheet's RATES and the database's AMOUNTS.
+
+    The point of comparison is that the two disagree for real reasons if
+    something is wrong, and agree closely if nothing is. Timing differs by
+    design: the sheet books income to the month it was FOR, the database to
+    the month the money ARRIVED.
+
+    Also returns the clients whose money has no split rule at all, because
+    that is a silent way to under-credit somebody.
+    """
+    rates = client_split_rates(year, sheet_id)
+    payers = [row["payer"] for row in connection.execute(
+        "SELECT DISTINCT payer FROM income WHERE excluded = 0 "
+        "AND business = 'hostlyft' AND payer IS NOT NULL AND payer != ''")]
+
+    def match(client):
+        low = client.lower()
+        for payer in payers:
+            first = payer.split()[0].lower()
+            if first.startswith(low[:4]) or low.startswith(first[:4]):
+                return payer
+        return None
+
+    earned, mapped = {}, set()
+    for client, person_rates in rates.items():
+        payer = match(client)
+        if not payer:
+            continue
+        mapped.add(payer)
+        received = connection.execute(
+            "SELECT COALESCE(SUM(amount_usd), 0) AS usd FROM income "
+            "WHERE excluded = 0 AND business = 'hostlyft' AND payer = ? "
+            "AND tax_year = ?", (payer, year)).fetchone()["usd"]
+        for person, rate in person_rates.items():
+            earned[person] = round(earned.get(person, 0.0) + received * rate, 2)
+
+    unattributed = []
+    for payer in payers:
+        if payer in mapped:
+            continue
+        usd = connection.execute(
+            "SELECT COALESCE(SUM(amount_usd), 0) AS usd FROM income "
+            "WHERE excluded = 0 AND business = 'hostlyft' AND payer = ? "
+            "AND tax_year = ?", (payer, year)).fetchone()["usd"]
+        if usd:
+            unattributed.append({"payer": payer, "usd": round(usd, 2)})
+
+    return {
+        "earned": earned,
+        "unattributed": sorted(unattributed, key=lambda r: -r["usd"]),
+        "unattributed_usd": round(sum(r["usd"] for r in unattributed), 2),
+        "clients": len(rates),
+    }

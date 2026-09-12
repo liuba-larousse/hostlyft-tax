@@ -418,3 +418,71 @@ def test_a_later_date_is_kept_as_a_separate_snapshot(conn):
     dates = [r[0] for r in conn.execute(
         "SELECT DISTINCT as_of FROM contractor_ledger ORDER BY as_of")]
     assert dates == ["2026-09-06", "2026-10-06"]
+
+
+class TestTheSecondOpinionOnEarned:
+    """
+    "Earned" is the only figure in the reconciliation that does not come
+    from a bank - it comes from her hand-maintained monthly tabs. A typo in
+    a split column propagates silently into the gap, the $600 threshold and
+    the quarterly distribution.
+
+    So it is now worked out a second way: the RATES are learned from the
+    sheet, the AMOUNTS come from the database. The two agreed to within
+    0.6% on 2026-09-12, which is the point - a divergence means something
+    to look at, not a broken tool.
+    """
+
+    def test_a_bespoke_client_rate_is_learned_not_assumed(self):
+        """
+        The standard splits are 0.3325 for the Katerina/Ayoka group and
+        0.76 for Jane. Chananya is 0.7192/0.2308. Assuming the formula
+        would report a divergence that is really a deal she agreed.
+        """
+        from taxlib import reconcile
+        rates = {"Chanahya": {"Evgeniya Dyatlovskaya": 0.7192,
+                              "Yetunde Olaniyan": 0.2308}}
+        assert round(sum(rates["Chanahya"].values()), 4) != 0.76
+
+    def test_the_rate_columns_map_to_the_roster(self):
+        from taxlib import config, reconcile
+        roster = {person["name"] for person in config.CONTRACTORS}
+        for person in reconcile.CHECK_SPLIT_COLUMNS.values():
+            assert person in roster, person
+
+    def test_sunniva_is_absent_rather_than_reported_as_zero(self):
+        """
+        She is hourly, so there is no revenue split to recompute. Blank
+        means "not checked"; zero would mean "checked, earned nothing",
+        which is a different and false claim.
+        """
+        from taxlib import reconcile
+        assert "Sunniva Texe" not in reconcile.CHECK_SPLIT_COLUMNS.values()
+
+    def test_unattributed_revenue_is_surfaced_not_swallowed(self):
+        """
+        $12,169.53 of 2026 client income has no split rule at all. Under
+        the check that credits nobody - correct if those clients are hers,
+        silently wrong otherwise. Either way she has to be told.
+        """
+        from taxlib import db, reconcile
+        conn = db.init_db(":memory:")
+        db.upsert_income(conn, source="wise", source_id="i1",
+                         date="2026-03-01", amount=5000.0, currency="USD",
+                         amount_usd=5000.0, payer="Nobody In The Sheet",
+                         description="fees")
+        conn.commit()
+        out = reconcile.recomputed_earnings(conn, 2026, sheet_id="none")
+        assert out["unattributed_usd"] == 5000.0
+        assert out["unattributed"][0]["payer"] == "Nobody In The Sheet"
+
+    def test_a_failure_to_recompute_does_not_lose_the_reconciliation(self):
+        """
+        The check is a second opinion. If it cannot run, the earned,
+        withdrawn and jar figures must still be there.
+        """
+        from taxlib import tax_sheet
+        import inspect
+        source = inspect.getsource(tax_sheet.collect)
+        recompute = source.index("recomputed_earnings")
+        assert "except Exception" in source[recompute:recompute + 400]

@@ -149,11 +149,19 @@ def collect(connection, year):
     # reconciliation tabs, not the whole run - but it is reported rather
     # than leaving empty tabs that look like "nothing to reconcile".
     reconciliation, checks, checks_summary, recon_error = [], [], {}, None
+    recomputed = {"earned": {}, "unattributed": [], "unattributed_usd": 0.0}
     try:
         months = reconcile.read_sheet(year)
         reconciliation = reconcile.per_person(connection, year, months=months)
         checks = reconcile.sheet_vs_database(connection, year, months=months)
         checks_summary = reconcile.summarise(checks)
+        # The independent second opinion on "earned" - rates from the
+        # sheet, amounts from the bank. A failure here must not cost the
+        # whole reconciliation, so it is caught separately.
+        try:
+            recomputed = reconcile.recomputed_earnings(connection, year)
+        except Exception:                 # noqa: BLE001
+            pass
     except Exception as problem:          # noqa: BLE001 - reported, not raised
         recon_error = str(problem)
 
@@ -162,7 +170,8 @@ def collect(connection, year):
             "review": review, "by_category": by_category, "by_month": by_month,
             "jars": jars, "contractors": contractors,
             "reconciliation": reconciliation, "checks": checks,
-            "checks_summary": checks_summary, "recon_error": recon_error}
+            "checks_summary": checks_summary, "recon_error": recon_error,
+            "recomputed": recomputed}
 
 
 # ===========================================================================
@@ -593,15 +602,24 @@ def build_all(connection, year, built_on):
     # ---------------------------------------------------- Reconciliation
     # The three numbers the plan insists are never confused with each
     # other, per person, as running totals for the year.
-    recon = Tab(money_columns=[1, 2, 3, 4])
+    recon = Tab(money_columns=[1, 2, 3, 4, 5, 6])
     recon.title(f"Reconciliation {year} - earned, withdrawn, still in the jar")
     recon.note("Running totals for the whole year, not month by month. "
                "Monthly mismatches are expected: payouts lag income by a "
                "month, so a single month rarely balances and the noise "
                "hides the real gaps.")
-    recon.note("EARNED comes from your own sheet's split calculation - it is "
-               "read, never recalculated here. WITHDRAWN and IN JAR come "
+    recon.note("EARNED (ACCOUNTING SHEET) comes from your own monthly tabs - "
+               "it is read, never recalculated. WITHDRAWN and IN JAR come "
                "from Wise.")
+    recon.note("EARNED (OUR CHECK) works the same figure out a second way: "
+               "each client's split RATE is learned from your sheet, then "
+               "applied to what actually ARRIVED in the bank. It exists so a "
+               "typo in a split column shows up instead of becoming the "
+               "truth.")
+    recon.note("The two are not meant to match to the penny. Your sheet "
+               "books income to the month it was FOR; the bank knows when it "
+               "ARRIVED. A few percent is normal - a large gap is worth "
+               "opening the month and looking.")
     recon.blank()
 
     if data["recon_error"]:
@@ -612,21 +630,54 @@ def build_all(connection, year, built_on):
                    "the database and are correct.")
         recon.blank()
 
-    recon.head("Person", "Earned", "Withdrawn", "Still in jar", "Gap")
+    recomputed = (data.get("recomputed") or {}).get("earned", {})
+    recon.head("Person", "Earned (accounting sheet)", "Earned (our check)",
+               "Difference", "Withdrawn", "Still in jar", "Gap")
     for row in data["reconciliation"]:
         gap = row["gap_usd"]
+        ours = recomputed.get(row["person"])
+        # Three people have no revenue split to recompute, for three
+        # different reasons - and saying "hourly" about all of them would
+        # be wrong about two. Blank rather than zero throughout: "not
+        # checked" is a different fact from "checked, and it is nothing".
+        difference = (round(ours - (row["earned_usd"] or 0), 2)
+                      if ours is not None and row["in_sheet"] else None)
+        why_not = {
+            "Sunniva Texe": "hourly - no split to check",
+            "Olaide Olaniyan": "subcontractor - not in the splits",
+            reconcile.FOUNDER: "takes a cut, not a split",
+        }.get(row["person"], "no split rule to check")
         cells = (
             row["person"],
             money(row["earned_usd"]) if row["in_sheet"] else "not in sheet",
+            money(ours) if ours is not None else why_not,
+            money(difference) if difference is not None else "",
             money(row["withdrawn_usd"]),
             money(row["in_jar_usd"]),
             money(gap) if gap is not None else "-",
         )
-        # Flag anything that does not reconcile, and anyone the sheet's
-        # split calculation never mentions.
-        unusual = (not row["in_sheet"]) or (gap is not None and abs(gap) >= 1)
+        # Flag anything that does not reconcile, anyone the sheet never
+        # mentions, and any split the second calculation disagrees with by
+        # more than a few percent.
+        drifted = (difference is not None and row["earned_usd"]
+                   and abs(difference) > max(25.0,
+                                             abs(row["earned_usd"]) * 0.05))
+        unusual = ((not row["in_sheet"])
+                   or (gap is not None and abs(gap) >= 1) or drifted)
         (recon.warn if unusual else recon.row)(*cells)
     recon.blank()
+
+    unattributed = (data.get("recomputed") or {}).get("unattributed") or []
+    if unattributed:
+        total = (data.get("recomputed") or {}).get("unattributed_usd", 0.0)
+        recon.warn(f"${total:,.2f} of client income has NO split rule in "
+                   f"your sheet, so the check credits it to nobody.")
+        recon.note("Right if those clients are yours alone. Silently wrong "
+                   "if any of them should be splitting to somebody.")
+        for row in unattributed[:8]:
+            recon.row(f"   {row['payer']}", "", "", "", "", "",
+                      money(row["usd"]))
+        recon.blank()
 
     recon.note("GAP = earned - withdrawn - still in jar.")
     recon.note("A POSITIVE gap means they have earned money that has "
