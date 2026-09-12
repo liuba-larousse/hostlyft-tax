@@ -214,6 +214,27 @@ def deductible_share(category):
     return CATEGORY_DEDUCTIBLE_SHARE.get((category or "").strip().lower(), 1.0)
 
 
+# HER RULE, GIVEN 2026-09-12: MONEY SENT STRAIGHT OUT OF A CONTRACTOR'S JAR
+# IS THAT CONTRACTOR'S PAYOUT, WHOEVER THE CHEQUE IS MADE OUT TO.
+#
+# She pays some people through a third party - Ayoka through her brother
+# Olatunbosun, Jane through Dmitry Kapitulskiy or Vadim Snitserev. Matching
+# on the recipient's name alone misses those, and a missed one is not a small
+# error: it drops a deductible contractor cost AND understates that person's
+# withdrawals, which is what the $600 threshold and the reconciliation gap
+# are both measured on.
+#
+# The named payment_aliases below catch the cases we know about. The general
+# rule she stated is stronger and is NOT yet automated: an outgoing transfer
+# that matches money just released from someone's jar belongs to that person,
+# even when the name has never been seen before. The evidence is already in
+# the database - jar_movements records what left each jar and when - so this
+# is a matching job, not a data problem.
+#
+# TODO, agreed with her: implement jar-sourced attribution in wise_import so
+# a new payee is recognised from the jar it came out of rather than waiting
+# to be added here by hand.
+
 CONTRACTORS = [
     {
         "name": "Katerina Mrvova",
@@ -257,13 +278,17 @@ CONTRACTORS = [
         "name": "Evgeniya Dyatlovskaya",
         "aliases": ["Jane", "Evgeniya", "Dyatlovskaya"],
         # Receives on her behalf.
-        "payment_aliases": ["Dmitry Kapitulskiy", "Kapitulskiy"],
+        "payment_aliases": ["Dmitry Kapitulskiy", "Kapitulskiy",
+                            "Snitserev Vadim", "Snitserev"],
         "us_person": False,
         "form": "W-8BEN",
         "issues_1099": False,
         "note": ("Known as Jane. Not a US person. Some payments go to Dmitry "
-                 "Kapitulskiy on her behalf - the work is hers, so the "
-                 "deduction and the W-8BEN are hers too."),
+                 "Kapitulskiy or Vadim Snitserev on her behalf - the work is "
+                 "hers, so the deduction and the W-8BEN are hers too. The "
+                 "$505.06 to Snitserev on 2026-09-10 emptied Jane's jar: "
+                 "$248.00 + $256.88 released plus the $0.18 left in it comes "
+                 "to exactly $505.06. See JAR_PAYOUT_RULE below."),
     },
     {
         "name": "Sunniva Texe",
