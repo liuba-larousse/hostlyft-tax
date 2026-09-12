@@ -778,7 +778,55 @@ def write(sheet_id, tabs, force=False):
             body={"requests": requests[chunk:chunk + 60]}),
             what="formatting")
 
+    cap_first_column(sheets, sheet_id)
     return sheet_id
+
+
+# Column A holds the titles and the explanatory notes, which are long
+# sentences. Auto-resize fits the LONGEST cell, so one note stretched column
+# A to 1,352 pixels on some tabs and pushed every figure off the screen.
+#
+# A cap rather than a fraction, because the tabs differ wildly: Checks was
+# 1,352 and Expenses only 79. Scaling everything to a third would have left
+# Expenses at 26 pixels, unreadable for the sake of a rule.
+FIRST_COLUMN_MAX_PX = 330
+
+
+def cap_first_column(sheets, sheet_id, max_px=FIRST_COLUMN_MAX_PX):
+    """
+    Narrow column A wherever auto-resize made it too wide to read across.
+
+    Runs after formatting, because autoResizeDimensions would otherwise
+    undo it. Only shrinks - a tab whose column A is already narrow is left
+    alone, so the notes stay readable without squashing the data tabs.
+
+    Long text still reads fine: with an empty cell beside it, Sheets spills
+    it across rather than clipping it.
+    """
+    meta = gsheets.call(sheets.spreadsheets().get(
+        spreadsheetId=sheet_id,
+        fields="sheets(properties(title,sheetId),"
+               "data(columnMetadata(pixelSize)))"),
+        what="reading the column widths")
+
+    requests = []
+    for sheet in meta.get("sheets", []):
+        columns = (sheet.get("data") or [{}])[0].get("columnMetadata") or []
+        if not columns:
+            continue
+        if (columns[0].get("pixelSize") or 0) <= max_px:
+            continue
+        requests.append({"updateDimensionProperties": {
+            "range": {"sheetId": sheet["properties"]["sheetId"],
+                      "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
+            "properties": {"pixelSize": max_px},
+            "fields": "pixelSize"}})
+
+    if requests:
+        gsheets.call(sheets.spreadsheets().batchUpdate(
+            spreadsheetId=sheet_id, body={"requests": requests}),
+            what="narrowing column A")
+    return len(requests)
 
 
 def freeze_for(tab):
