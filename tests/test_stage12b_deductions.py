@@ -342,3 +342,65 @@ class TestTheFiguresWereReadFromTheIrsNotGuessed:
         """
         from taxlib import config
         assert config.STANDARD_MILEAGE_RATE is None
+
+
+class TestAMealNeedsAReasonTheBankCannotSupply:
+    """
+    The weakest part of a meal deduction, and weak in a particular way: the
+    AMOUNT is never in doubt, because the bank recorded it. What is missing
+    is WHY, and who was there - and an examiner does not have to prove the
+    meal was personal, she has to show it was business.
+
+    rules.txt told her to run scripts/meals.py from the day meals were
+    added. The script did not exist and there was nowhere to put an answer.
+    """
+
+    @staticmethod
+    def _meal(conn, **kw):
+        from taxlib import db
+        db.upsert_expense(conn, source="wise", source_id="personal:CARD-9",
+                          date="2026-01-12", amount=19.50, currency="EUR",
+                          amount_usd=22.80, category="meals",
+                          vendor="Le Pacha Kebab", description="lunch", **kw)
+        conn.commit()
+
+    def test_there_is_somewhere_to_record_the_reason(self):
+        from taxlib import db
+        conn = db.init_db(":memory:")
+        columns = {row[1] for row in
+                   conn.execute("PRAGMA table_info(expenses)")}
+        assert "business_purpose" in columns
+        assert "attendees" in columns
+
+    def test_an_imported_meal_starts_with_no_reason_rather_than_a_stock_one(
+            self):
+        """
+        NULL is the honest starting value. Writing "business meal" into
+        every row would be inventing the very evidence the IRS asks for,
+        and it would look identical to a reason she actually gave.
+        """
+        from taxlib import db
+        conn = db.init_db(":memory:")
+        self._meal(conn)
+        row = conn.execute("SELECT business_purpose, attendees "
+                           "FROM expenses").fetchone()
+        assert row["business_purpose"] is None
+        assert row["attendees"] is None
+
+    def test_a_recorded_reason_survives_a_re_import(self):
+        """
+        Same guard as her review decisions. Under the daily sync, a reason
+        typed in once must not be wiped by the next night's import.
+        """
+        from taxlib import db
+        conn = db.init_db(":memory:")
+        self._meal(conn)
+        conn.execute("UPDATE expenses SET business_purpose = 'Planning with "
+                     "Ayoka', attendees = 'Yetunde Olaniyan', "
+                     "needs_review = 0, review_note = 'confirmed by you'")
+        conn.commit()
+        self._meal(conn, needs_review=True, review_note="is this business?")
+        row = conn.execute("SELECT business_purpose, attendees "
+                           "FROM expenses").fetchone()
+        assert row["business_purpose"] == "Planning with Ayoka"
+        assert row["attendees"] == "Yetunde Olaniyan"

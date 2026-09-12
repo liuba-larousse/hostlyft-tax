@@ -92,7 +92,7 @@ from taxlib import config
 #      + wise_jars, contractor_ledger
 #   3  + jar_movements: money moved INTO and OUT OF each jar
 #   4  + contractor_forms: whether each person's W-9 or W-8BEN is on file
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 # ===========================================================================
@@ -266,6 +266,13 @@ CREATE TABLE IF NOT EXISTS expenses (
     exclusion_reason  TEXT,
 
     needs_review      INTEGER NOT NULL DEFAULT 0,
+
+    -- WHAT THE BANK CANNOT SEE, AND THE IRS ASKS FOR.
+    -- A card row says "restaurant". It never says who was there or why.
+    -- For a business meal the IRS wants both, and without them the
+    -- deduction does not survive being questioned - however genuine it was.
+    business_purpose  TEXT,
+    attendees         TEXT,
     review_note       TEXT,
 
     created_at        TEXT    NOT NULL,
@@ -645,12 +652,36 @@ def _migrate_4_to_5(connection):
     return ["added distributions (the quarterly profit split)"]
 
 
+def _migrate_5_to_6(connection):
+    """
+    Version 5 -> 6.
+
+    Adds business_purpose and attendees to expenses, for meals.
+
+    Existing rows get NULL, which is the honest starting value: nobody has
+    recorded a purpose for them. Filling in something like "business meal"
+    would be inventing the very evidence the IRS asks for.
+    """
+    existing = {row[1] for row in
+                connection.execute("PRAGMA table_info(expenses)")}
+    added = []
+    for column in ("business_purpose", "attendees"):
+        if column not in existing:
+            connection.execute(
+                f"ALTER TABLE expenses ADD COLUMN {column} TEXT")
+            added.append(column)
+    connection.commit()
+    return [f"added {', '.join(added)} to expenses (meal substantiation)"] \
+        if added else []
+
+
 # version to reach -> the function that gets there
 MIGRATIONS = {
     2: _migrate_1_to_2,
     3: _migrate_2_to_3,
     4: _migrate_3_to_4,
     5: _migrate_4_to_5,
+    6: _migrate_5_to_6,
 }
 
 
