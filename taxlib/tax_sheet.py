@@ -607,14 +607,18 @@ def form_lines_tab(connection, year, result):
         tab.blank()
 
     # ---- 1040-ES, the one with a deadline ------------------------------
-    tab.row("Form 1040-ES", "-", "Estimated tax for each quarter",
-            money(round((result.get("total") or 0) / 4, 2)),
-            "THE 2026 FORM IS PUBLISHED - the only one that is")
+    plan = filings.installments(result.get("total") or 0.0, tax_year=year)
+    owed = {row["quarter"]: row["voucher"] for row in plan["quarters"]}
+    tab.row("Form 1040-ES", "-", "Required annual payment",
+            money(plan["required_year"]),
+            "90% of the year's tax. THE 2026 FORM IS PUBLISHED - the only "
+            "one that is, and scripts/fill_1040es.py fills it.")
     for quarter in filings.quarters(year):
         tab.row("Form 1040-ES", f"Q{quarter['quarter']} voucher",
                 f"due {quarter['due']}",
-                money(round((result.get("total") or 0) / 4, 2)),
-                quarter["period"])
+                money(owed.get(quarter["quarter"], 0.0)),
+                f"{quarter['period']} - the share due by this date, less "
+                f"what has been paid")
     tab.row("Form 1040-ES", "YOU", "Name, SSN, address on the voucher", "",
             "or pay online at irs.gov/payments and skip the voucher")
     return tab
@@ -639,11 +643,19 @@ def tax_calendar_tab(connection, year, result, today=None):
     from taxlib import filings
 
     today = today or _d.date.today()
-    per_quarter = round((result.get("total") or 0.0) / 4, 2)
 
     paid = {}
     for row in db.tax_payments_for(connection, year):
         paid.setdefault(row["quarter"], []).append(row)
+
+    # Each voucher is the share due by ITS deadline less what has gone, not
+    # a flat quarter of the total - income arrives unevenly and a quarter
+    # divided in March would leave the year short. Recomputed every build.
+    paid_totals = {q: sum(r["amount_usd"] or r["amount"] or 0 for r in rows)
+                   for q, rows in paid.items()}
+    plan = filings.installments(result.get("total") or 0.0, paid_totals,
+                                tax_year=year)
+    owed = {row["quarter"]: row["voucher"] for row in plan["quarters"]}
 
     rows = []
     for quarter in filings.quarters(year, today):
@@ -662,15 +674,22 @@ def tax_calendar_tab(connection, year, result, today=None):
             how = ""
         rows.append([
             f"Q{number}", quarter["period"], str(quarter["due"]),
-            money(per_quarter), money(amount) if seen else "",
+            money(owed.get(number, 0.0)), money(amount) if seen else "",
             status, how,
         ])
 
     quarters_tab = simple_tab(
         f"Estimated tax - {year}",
-        [f"Your total estimate for {year} is "
-         f"${result.get('total') or 0:,.2f}, so ${per_quarter:,.2f} a "
-         f"quarter. Self-employment tax is effectively all of it.",
+        [f"Tax on the year so far is ${result.get('total') or 0:,.2f}; the "
+         f"required annual payment is 90% of it, "
+         f"${plan['required_year']:,.2f}. Self-employment tax is "
+         f"effectively all of it.",
+         "EACH VOUCHER IS THE SHARE DUE BY ITS OWN DEADLINE, less what has "
+         "been paid - not a flat quarter of the total. Income arrives "
+         "unevenly, so a figure divided in March would leave the year "
+         "short, and a missed quarter is caught up by the next one.",
+         "Rebuilt every run, which is the point: it is a snapshot of what "
+         "is known today, and what is known keeps changing.",
          "IRS QUARTERS ARE NOT THREE MONTHS EACH. Q2 is two months and Q4 "
          "is four. The periods below are the IRS's own.",
          "\"NOT SEEN\" DOES NOT MEAN UNPAID. This checks your personal "

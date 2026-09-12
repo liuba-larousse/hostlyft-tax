@@ -207,3 +207,60 @@ def quarter_for_payment(paid_on):
     if paid_on <= dt.date(year, 9, 15):
         return year, 3
     return year, 4
+
+
+# The share of the year's required tax that must be paid by each deadline.
+# Level quarters: a quarter of it each time.
+CUMULATIVE_SHARE = {1: 0.25, 2: 0.50, 3: 0.75, 4: 1.00}
+
+# Pay at least this much of the year's tax and no underpayment penalty
+# applies. The other safe harbour - 100% of LAST year's total tax - protects
+# her regardless of how this year lands, and is the one to lean on if the
+# year ends bigger than expected.
+REQUIRED_SHARE_OF_YEAR = 0.90
+
+
+def installments(tax_for_year, paid_by_quarter=None, today=None,
+                 tax_year=None):
+    """
+    What each voucher should say, recomputed from the year SO FAR.
+
+    WHY NOT SIMPLY A QUARTER OF THE TOTAL, WHICH IS WHAT THIS USED TO DO
+        Her question, and she is right. Dividing the tax on income received
+        SO FAR by four treats a part-year figure as the whole year. Income
+        keeps arriving, the annual tax keeps rising, and four equal
+        payments of a number computed in March would end the year short.
+
+        So each voucher is worked out as: the share of the year's tax that
+        must be paid by THAT deadline, less whatever has already gone. A
+        quarter where earnings jumped produces a bigger voucher on its own,
+        and a missed quarter is caught up by the next one rather than
+        quietly forgotten.
+
+        THIS ONLY WORKS IF IT IS RE-RUN EACH QUARTER. That is the point of
+        it - the figure is a snapshot of what is known today, and what is
+        known changes. scripts/fill_1040es.py recomputes before it fills.
+
+    The required annual payment is 90% of the year's tax. The other safe
+    harbour - 100% of last year's total - is not modelled here because her
+    2025 figures are not in the database; it is mentioned wherever this is
+    shown, because it is the stronger protection if the year ends big.
+    """
+    paid_by_quarter = paid_by_quarter or {}
+    required_year = round(tax_for_year * REQUIRED_SHARE_OF_YEAR, 2)
+
+    rows, paid_so_far = [], 0.0
+    for quarter in (1, 2, 3, 4):
+        due = required_year * CUMULATIVE_SHARE[quarter]
+        already = paid_by_quarter.get(quarter, 0.0)
+        voucher = max(0.0, round(due - paid_so_far, 2))
+        paid_so_far += already
+        rows.append({
+            "quarter": quarter,
+            "cumulative_required": round(due, 2),
+            "paid": round(already, 2),
+            "voucher": voucher,
+            "period": dict((q, p) for q, p, _ in ESTIMATED_QUARTERS)[quarter],
+            "due": due_date(quarter, tax_year) if tax_year else None,
+        })
+    return {"required_year": required_year, "quarters": rows}

@@ -255,3 +255,83 @@ class TestTheFormWorksheet:
     def test_lines_that_only_she_can_fill_are_marked(self):
         rows = self._tab().rows
         assert any(len(r) > 1 and r[1] == "YOU" for r in rows)
+
+
+class TestEachVoucherIsRecomputedNotJustTheTotalOverFour:
+    """
+    Her correction. Dividing the tax on income received SO FAR by four
+    treats a part-year figure as the whole year: income keeps arriving, the
+    annual tax keeps rising, and four equal payments computed in March end
+    the year short.
+
+    Each voucher is now the share due by ITS deadline less what has been
+    paid - so a quarter that earned more produces a bigger voucher on its
+    own, and a missed quarter is caught up by the next.
+    """
+
+    def test_the_vouchers_are_not_all_the_same(self):
+        from taxlib import filings
+        plan = filings.installments(3446.36, {}, tax_year=2026)
+        amounts = [row["voucher"] for row in plan["quarters"]]
+        assert len(set(amounts)) > 1
+
+    def test_a_missed_quarter_is_caught_up_by_the_next(self):
+        """Nothing paid by September means Q3 carries Q1 and Q2 as well."""
+        from taxlib import filings
+        plan = filings.installments(3446.36, {}, tax_year=2026)
+        third = [r for r in plan["quarters"] if r["quarter"] == 3][0]
+        assert third["voucher"] == third["cumulative_required"]
+        assert third["voucher"] > plan["required_year"] / 4
+
+    def test_paying_on_time_keeps_each_voucher_level(self):
+        from taxlib import filings
+        paid = {1: 775.43, 2: 775.43}
+        plan = filings.installments(3446.36, paid, tax_year=2026)
+        third = [r for r in plan["quarters"] if r["quarter"] == 3][0]
+        assert abs(third["voucher"] - 775.43) < 1.0
+
+    def test_the_required_payment_is_ninety_percent_of_the_year(self):
+        from taxlib import filings
+        plan = filings.installments(1000.0, {}, tax_year=2026)
+        assert plan["required_year"] == 900.0
+
+    def test_a_voucher_never_goes_negative(self):
+        """Overpaying early must not produce a negative demand."""
+        from taxlib import filings
+        plan = filings.installments(1000.0, {1: 5000.0}, tax_year=2026)
+        assert all(row["voucher"] >= 0 for row in plan["quarters"])
+
+
+class TestTheRightAmountOnTheRightVoucher:
+    """
+    While every quarter was the same figure, which voucher was which did
+    not matter. Now that they differ, putting the wrong number on a real
+    form is a real error - so each voucher is identified by the DUE DATE it
+    prints, not by guessing at opaque field names like f15_1[0].
+    """
+
+    def test_each_quarter_has_a_due_date_pattern_to_match_on(self):
+        import re
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path.cwd() / "scripts"))
+        import fill_1040es
+        assert set(fill_1040es.DUE_TEXT) == {1, 2, 3, 4}
+        for quarter, pattern in fill_1040es.DUE_TEXT.items():
+            filled = pattern % {"y": 2026, "next": 2027}
+            re.compile(filled)
+
+    def test_the_patterns_match_the_dates_the_form_actually_prints(self):
+        """Read off the real 2026 form: 'Calendar year-Due Sept. 15, 2026'."""
+        import re
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path.cwd() / "scripts"))
+        import fill_1040es
+        printed = {1: "Calendar year—Due April 15, 2026",
+                   2: "Calendar year—Due June 15, 2026",
+                   3: "Calendar year—Due Sept. 15, 2026",
+                   4: "Calendar year—Due Jan. 15, 2027"}
+        for quarter, text in printed.items():
+            pattern = fill_1040es.DUE_TEXT[quarter] % {"y": 2026, "next": 2027}
+            assert re.search(pattern, text, re.I), (quarter, text)

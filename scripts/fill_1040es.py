@@ -52,19 +52,40 @@ ABROAD_ADDRESS = ("Internal Revenue Service\n"
                   "Charlotte, NC 28201-1303")
 
 
-def amount_fields(page):
-    """
-    The "Amount of payment" boxes, found by SHAPE rather than by name.
+DUE_TEXT = {
+    1: r"April\s*15,\s*%(y)s", 2: r"June\s*15,\s*%(y)s",
+    3: r"Sept[.]?\s*15,\s*%(y)s", 4: r"Jan[.]?\s*15,\s*%(next)s",
+}
 
-    The field names are opaque - f15_1[0] and so on - so guessing which is
-    which would be guessing. The amount box is identifiable by geometry
-    instead: it sits alone on the right-hand side, around x=482, about 92
-    points wide, with no other field on its row.
+
+def voucher_amount_fields(page, year):
     """
-    found = []
-    annots = page.get("/Annots") or []
+    Map each voucher number to its "Amount of payment" box.
+
+    BY THE DUE DATE PRINTED ON THE VOUCHER, not by guessing.
+
+    The field names are opaque - f15_1[0] and so on - and the four vouchers
+    are spread two to a page in an order that is not 1,2,3,4. While every
+    quarter happened to be the same amount this did not matter; now that
+    each voucher carries its own figure, putting the wrong number on a real
+    form is a real error.
+
+    So each voucher is identified by the date it prints - "Calendar
+    year-Due Sept. 15, 2026" - and paired with the amount box directly
+    beneath it, which is consistently about 40 points below. A voucher
+    whose date cannot be read is left blank rather than guessed at.
+    """
+    labels = []
+
+    def visit(text, cm, tm, font, size):
+        stripped = text.strip()
+        if stripped:
+            labels.append((round(tm[5]), stripped))
+
+    page.extract_text(visitor_text=visit)
+
     boxes = []
-    for annot in annots:
+    for annot in (page.get("/Annots") or []):
         obj = annot.get_object()
         name = obj.get("/T")
         if not name and obj.get("/Parent"):
@@ -72,14 +93,20 @@ def amount_fields(page):
         rect = obj.get("/Rect")
         if name and rect:
             x0, y0, x1, y1 = [float(v) for v in rect]
-            boxes.append((str(name), x0, y0, x1 - x0))
-    for name, x0, y0, width in boxes:
-        if x0 < 460 or not (70 <= width <= 110):
-            continue
-        alone = not any(abs(other_y - y0) < 4 and other_name != name
-                        for other_name, _, other_y, _ in boxes)
-        if alone:
-            found.append(name)
+            if x0 >= 460 and 70 <= (x1 - x0) <= 110:
+                boxes.append((round(y0), str(name)))
+
+    found = {}
+    for quarter, pattern in DUE_TEXT.items():
+        wanted = pattern % {"y": year, "next": year + 1}
+        for y, text in labels:
+            if not re.search(wanted, text, re.I):
+                continue
+            # the amount box just below this label, nearest first
+            below = sorted((y - by, name) for by, name in boxes if by < y)
+            if below and below[0][0] < 80:
+                found[quarter] = below[0][1]
+            break
     return found
 
 
@@ -99,18 +126,26 @@ def main():
 
     connection = db.init_db()
     result = tax.from_database(connection, args.year)
-    per_quarter = round((result.get("total") or 0.0) / 4, 2)
+
+    paid = {}
+    for row in db.tax_payments_for(connection, args.year):
+        paid[row["quarter"]] = (paid.get(row["quarter"], 0.0)
+                                + (row["amount_usd"] or row["amount"] or 0.0))
+    plan = filings.installments(result.get("total") or 0.0, paid,
+                                tax_year=args.year)
+    amounts = {row["quarter"]: row["voucher"] for row in plan["quarters"]}
 
     print(f"{BOLD}Form 1040-ES {args.year}{OFF}")
     print("=" * 74)
-    print(f"   Total estimate  ${result.get('total') or 0:,.2f}")
-    print(f"   Each voucher    ${per_quarter:,.2f}")
-    if result.get("jars_assumption_applied"):
-        jars = result["contractor_jars"]["usd"]
-        print(f"   {YELLOW}This assumes ${jars:,.2f} of contractor jars is "
-              f"paid out before 31 December.{OFF}")
-        print(f"   {YELLOW}If it is not, each voucher should be "
-              f"${(result['tax_if_jars_stay'] or 0) / 4:,.2f} instead.{OFF}")
+    print(f"   Tax on the year so far      "
+          f"${result.get('total') or 0:>9,.2f}")
+    print(f"   Required annual payment     "
+          f"${plan['required_year']:>9,.2f}   (90% of it)")
+    print(f"   {YELLOW}Recomputed every run. Each voucher is the share due "
+          f"by ITS deadline{OFF}")
+    print(f"   {YELLOW}less what has been paid - so a quarter that earned "
+          f"more, or one{OFF}")
+    print(f"   {YELLOW}that was missed, is caught up by the next.{OFF}")
     print()
 
     print("   downloading the form from irs.gov ...")
@@ -127,7 +162,7 @@ def main():
     writer = PdfWriter()
     writer.append(reader)
 
-    filled = 0
+    filled, wrote = 0, {}
     for index, page in enumerate(writer.pages):
         # VOUCHER PAGES ONLY, and this is not belt-and-braces - without it
         # the geometry filter also matched 19 fields on the Estimated Tax
@@ -141,15 +176,16 @@ def main():
         text = re.sub(r"\s+", " ", reader.pages[index].extract_text() or "")
         if "Payment Voucher" not in text:
             continue
-        names = amount_fields(page)
+        names = voucher_amount_fields(reader.pages[index], args.year)
         if not names:
             continue
-        # Every quarter is the same amount, so which voucher is which does
-        # not have to be resolved - a point worth keeping in mind if the
-        # quarters ever stop being level.
-        writer.update_page_form_field_values(
-            page, {name: f"{per_quarter:,.2f}" for name in names})
-        filled += len(names)
+        values = {field: f"{amounts[quarter]:,.2f}"
+                  for quarter, field in names.items()
+                  if amounts.get(quarter)}
+        if values:
+            writer.update_page_form_field_values(page, values)
+            filled += len(values)
+            wrote.update({q: amounts[q] for q in names if amounts.get(q)})
 
     if filled != 4:
         print(f"{YELLOW}   Expected 4 vouchers, filled {filled}. The form's "
@@ -164,8 +200,9 @@ def main():
     with open(target, "wb") as handle:
         writer.write(handle)
 
-    print(f"{GREEN}   Filled {filled} amount boxes with "
-          f"${per_quarter:,.2f}.{OFF}")
+    print(f"{GREEN}   Filled {filled} voucher(s):{OFF}")
+    for quarter in sorted(wrote):
+        print(f"      Voucher {quarter}  ${wrote[quarter]:>9,.2f}")
     print(f"   {target}")
     print()
     print(f"{BOLD}STILL TO DO BY HAND{OFF}")
@@ -181,12 +218,13 @@ def main():
           f"entirely.{OFF}")
     print()
     for quarter in filings.quarters(args.year):
+        number = quarter["quarter"]
         marker = ("  <- due in "
                   f"{quarter['days_away']} days") if 0 <= quarter[
                       "days_away"] <= 30 else ""
         overdue = "  <- OVERDUE" if quarter["overdue"] else ""
-        print(f"   Voucher {quarter['quarter']}  {quarter['period']:<11} "
-              f"due {quarter['due']}  ${per_quarter:>8,.2f}"
+        print(f"   Voucher {number}  {quarter['period']:<11} "
+              f"due {quarter['due']}  ${amounts.get(number, 0):>9,.2f}"
               f"{marker}{overdue}")
     return 0
 
