@@ -306,3 +306,78 @@ class TestBatchedPayouts:
         found, _ = wise_import.has_income_from(conn, "upwork", "2026-07-30")
         assert found is False
         conn.close()
+
+
+class TestARefundMustNotVanishIntoThePersonalAccount:
+    """
+    Opening the personal account on 6 September 2026 let travel and meals be
+    READ - but only money going OUT. Money coming back in still hit the
+    "personal life, drop it" filter, because a refund's sender matches no
+    client.
+
+    So a charge was deducted and its refund was invisible. Travel and meals
+    are exactly the two categories that get cancelled and refunded, which
+    made this systematic rather than unlucky. Three real cases were found by
+    hand on 2026-09-12 - an Airbnb booking, a cancelled Blablacar seat, and
+    AirHelp compensation on a delayed business flight - together overstating
+    deductions by about $1,270.
+
+    The rule is narrow on purpose: a credit is kept ONLY when its sender
+    matches a merchant the database already has personal-account spending
+    for. Her instruction that ordinary personal income is never read still
+    holds, and the last two tests are what prove it.
+    """
+
+    @staticmethod
+    def _db_with_personal_spending():
+        from taxlib import db
+        conn = db.init_db(":memory:")
+        conn.execute(
+            "INSERT INTO expenses (source, source_id, date, tax_year, amount,"
+            " currency, amount_usd, category, vendor, description, business,"
+            " created_at, updated_at)"
+            " VALUES ('wise','personal:CARD-1','2026-07-29',2026,1063.96,"
+            "'USD',1063.96,'travel','Airbnb','Airbnb stay','hostlyft','x','x')")
+        conn.execute(
+            "INSERT INTO expenses (source, source_id, date, tax_year, amount,"
+            " currency, amount_usd, category, vendor, description, business,"
+            " created_at, updated_at)"
+            " VALUES ('wise','personal:CARD-2','2026-07-01',2026,140.75,"
+            "'USD',140.75,'meals','Uber Eats','food','hostlyft','x','x')")
+        conn.commit()
+        return conn
+
+    def test_a_refund_from_a_merchant_being_claimed_is_kept(self):
+        from taxlib import wise_import
+        conn = self._db_with_personal_spending()
+        found = wise_import._refund_of_claimed_spending(
+            conn, description="Card transaction refund of 1,063.96 USD "
+                              "issued by Airbnb * Hmsp344cs4 AIRBNB.COM",
+            amount=1063.96, currency="USD")
+        assert found is not None
+        assert found["category"] == "travel"
+
+    def test_the_refund_takes_the_category_of_what_it_reverses(self):
+        """A refunded meal must come back at 50%, not 100%."""
+        from taxlib import wise_import
+        conn = self._db_with_personal_spending()
+        found = wise_import._refund_of_claimed_spending(
+            conn, description="Received money from Uber   * Eats Pending",
+            amount=30.00, currency="USD")
+        assert found is not None
+        assert found["category"] == "meals"
+
+    def test_unrelated_personal_money_is_still_never_read(self):
+        """The privacy rule is the constraint this fix had to stay inside."""
+        from taxlib import wise_import
+        conn = self._db_with_personal_spending()
+        assert wise_import._refund_of_claimed_spending(
+            conn, description="Received money from Aunt Mildred",
+            amount=500.00, currency="USD") is None
+
+    def test_a_salary_or_gift_is_not_mistaken_for_a_refund(self):
+        from taxlib import wise_import
+        conn = self._db_with_personal_spending()
+        assert wise_import._refund_of_claimed_spending(
+            conn, description="Received money from CLOUD9 WINDY CIT",
+            amount=4000.00, currency="USD") is None

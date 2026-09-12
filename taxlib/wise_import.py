@@ -165,6 +165,44 @@ def _business_subscription(description):
     return None, None
 
 
+def _refund_of_claimed_spending(connection, *, description, amount, currency):
+    """
+    Is this incoming money a refund of spending already in the database?
+
+    Returns {"vendor", "category"} when the sender matches a merchant this
+    database already holds PERSONAL-account spending for, else None.
+
+    Why it is scoped that narrowly: her instruction is that ordinary
+    personal income must never be read. A refund from a merchant whose
+    charge is already being deducted is not ordinary personal income - it
+    is the reversal of a number already on her return. Anything else is
+    still dropped unread.
+    """
+    from taxlib import categorize
+
+    candidates = [c for c in (categorize.merchant_from_card(description),
+                              sender_of(description)) if c]
+    if not candidates:
+        return None
+
+    rows = connection.execute(
+        "SELECT DISTINCT vendor, category FROM expenses "
+        "WHERE source_id LIKE 'personal:%' AND vendor IS NOT NULL "
+        "AND vendor != '' AND amount > 0").fetchall()
+
+    for candidate in candidates:
+        flat = categorize._match_text(candidate)
+        if len(flat) < 4:
+            continue
+        for row in rows:
+            vendor = categorize._match_text(row["vendor"])
+            if len(vendor) < 4:
+                continue
+            if vendor in flat or flat in vendor:
+                return {"vendor": row["vendor"], "category": row["category"]}
+    return None
+
+
 def _contains(text, needles):
     low = (text or "").lower()
     return any(n.lower() in low for n in needles)
@@ -628,6 +666,47 @@ def build_records(connection, transactions, *, profile_label, business,
                 profile=profile_label, source_id=source_id)
 
             if personal and decision["kind"] in ("unknown", "jar_move"):
+                # A REFUND OF SOMETHING ALREADY BEING CLAIMED IS NOT
+                # PERSONAL LIFE, AND MUST NOT BE DROPPED HERE.
+                #
+                # Opening the personal account let travel and meals be READ,
+                # but only money going OUT. Money coming back in still fell
+                # through this filter, because a refund's sender matches no
+                # client. So the charge was deducted and the refund was
+                # invisible - and travel and meals are precisely the two
+                # categories that get cancelled and refunded.
+                #
+                # Three were found by hand on 2026-09-12: an Airbnb booking,
+                # a cancelled Blablacar seat, and AirHelp compensation on a
+                # delayed business flight. Each one overstated a deduction.
+                #
+                # The test stays inside her privacy rule: a credit is kept
+                # ONLY when it comes from a merchant this database already
+                # has personal-account spending for. An unrelated credit is
+                # still dropped unread.
+                refund = _refund_of_claimed_spending(
+                    connection, description=description, amount=abs(amount),
+                    currency=currency)
+                if refund:
+                    expenses.append({
+                        "source": "wise", "source_id": source_id,
+                        "date": date, "amount": -abs(amount),
+                        "currency": currency, "business": business,
+                        "amount_usd": (-abs(amount) if currency == "USD"
+                                       else None),
+                        "category": refund["category"],
+                        "vendor": refund["vendor"],
+                        "description": (f"Refund from {refund['vendor']} - "
+                                        f"reduces the deduction"),
+                        "needs_review": True,
+                        "review_note": (
+                            f"money back from {refund['vendor']}, who you "
+                            f"have {refund['category']} charges with. Netted "
+                            f"off so the deduction is what you actually bore. "
+                            f"Confirm it refunds a charge being claimed and "
+                            f"is not unrelated personal money."),
+                    })
+                    continue
                 # Personal life. Dropped without being recorded anywhere.
                 skipped_personal += 1
                 continue
