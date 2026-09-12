@@ -403,16 +403,18 @@ def distributions_tab(connection, year):
          "The pool is every Hostlyft balance converted to USD, less every "
          "jar (already set aside for a person, hers included), less the "
          "$1,000 operating buffer.",
-         "20% is shared equally between the four; 80% goes by revenue "
-         "driven. Marcus is excluded — that work is hers alone. Sunniva is "
-         "not in the split; she is hourly.",
+         "20% is shared equally between the four; 80% goes by DOLLARS "
+         "EARNED that quarter. Marcus is excluded — that work is hers "
+         "alone. Sunniva is not in the split; she is hourly.",
          "A TEAM BONUS IS DEDUCTIBLE ONLY ONCE WITHDRAWN. Declared and left "
          "in a jar, it is not yet a cost. Her own share is never "
          "deductible.",
-         "Katerina and Ayoka share one client group, so its revenue is "
-         "counted once and halved — which is why their weights are equal."],
-        ["Quarter", "Months", "Person", "Revenue driven", "Even 20%",
-         "By revenue 80%", "TOTAL", "Deductible?", "Withdrawn", "Pool"],
+         "Liuba's 5% is a rate on revenue; the 80% is split on dollars "
+         "earned. On a $1,000 client payment she takes $50 where Katerina "
+         "and Ayoka take $665 — which is why she lands near 7% of the pool, "
+         "not 5%. Different measures, not an error."],
+        ["Quarter", "Months", "Person", "Earned", "Even 20%",
+         "By earned 80%", "TOTAL", "Deductible?", "Withdrawn", "Pool"],
         rows, money_columns=[3, 4, 5, 6, 9],
         empty_message="No distribution has been recorded yet — run "
                       "scripts/quarterly_distribution.py")

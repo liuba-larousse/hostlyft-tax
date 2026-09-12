@@ -111,27 +111,36 @@ def compute_pool(*, balances_usd, jars_usd, buffer_usd=None):
     }
 
 
-def revenue_weights(earned_by_person):
+def earned_weights(earned_by_person):
     """
-    How much revenue each person drove, as the weights for the 80% share.
+    How many dollars each person EARNED in the quarter - the weights for the
+    80% share.
 
-    The sheet does not record "revenue driven" anywhere, but it can be read
-    back out of the split it already computes, because each person's cut is
-    a fixed fraction of the revenue behind it:
+    WEIGHTED BY DOLLARS EARNED, NOT BY REVENUE DRIVEN. Her instruction, to
+    match the method worked out in the "Accounting spreadsheet" chat. The two
+    are not the same thing and give different answers, so it is worth being
+    explicit about which this is.
 
-        Katerina = group revenue x 0.95 x 0.70 x 0.50
-        Ayoka    = group revenue x 0.95 x 0.70 x 0.50
-        Jane     = her clients'  x 0.95 x 0.80
+    Take one $1,000 payment from a Katerina/Ayoka client:
 
-    CAREFUL - KATERINA AND AYOKA SHARE ONE CLIENT GROUP. Inverting both
-    formulas gives the SAME pot twice, and adding them double-counts it.
-    The group is therefore recovered once and split in half, which also
-    makes their weights exactly equal, as the 50/50 split says they must be.
+        Liuba  5% off the top                        $   50
+        K + A  70% of the remaining $950             $  665   ($332.50 each)
+        retained business profit                     $  285
 
-    Liuba's weight is the 5% she takes off the top of every client payment -
-    her own answer on 2026-09-12 to what revenue she drove. That makes the
-    weights a true partition of gross client revenue: her 5% plus the 95%
-    the managers divide.
+    Her 5% is a rate on revenue; the 80% share is divided on dollars earned.
+    Measured in dollars she takes $50 where the pair take $665, so she lands
+    near 7% of the combined earned pool rather than the 5% the rate might
+    suggest. Those two numbers measure different things, and the gap between
+    them is by design rather than an error.
+
+    Each manager's weight is simply what the sheet already says they earned.
+    Liuba's is the 5% off the top, which has to be recovered from gross
+    client revenue - and THAT is where the one trap lives:
+
+    KATERINA AND AYOKA SHARE ONE CLIENT GROUP. Inverting both their formulas
+    recovers the SAME pot twice, so the group is recovered once and averaged.
+    Adding them would put gross revenue near $34,250 against a true $18,952,
+    and inflate her 5% to match.
     """
     ka_share = 0.95 * 0.70 * 0.50
     jane_share = 0.95 * 0.80
@@ -140,27 +149,26 @@ def revenue_weights(earned_by_person):
     ayoka = earned_by_person.get(config.AYOKA, 0.0)
     jane = earned_by_person.get(config.JANE, 0.0)
 
-    # One pot, recovered from whichever of the two has a figure. They should
-    # agree; small sheet differences are averaged rather than doubled.
     derivations = [x / ka_share for x in (katerina, ayoka) if x]
     group_revenue = sum(derivations) / len(derivations) if derivations else 0.0
     jane_revenue = jane / jane_share if jane else 0.0
-
     gross = group_revenue + jane_revenue
-    off_the_top = gross * config.DISTRIBUTION["founder_off_the_top"]
-    remaining = gross - off_the_top
 
     if not gross:
         return {}, 0.0
 
-    managers = (group_revenue + jane_revenue)
     weights = {
-        config.FOUNDER: round(off_the_top, 2),
-        config.KATERINA: round(remaining * (group_revenue / managers) / 2, 2),
-        config.AYOKA: round(remaining * (group_revenue / managers) / 2, 2),
-        config.JANE: round(remaining * (jane_revenue / managers), 2),
+        config.FOUNDER: round(gross * config.DISTRIBUTION[
+            "founder_off_the_top"], 2),
+        config.KATERINA: round(katerina, 2),
+        config.AYOKA: round(ayoka, 2),
+        config.JANE: round(jane, 2),
     }
     return weights, round(gross, 2)
+
+
+# The name it had while weights were revenue-driven rather than earned.
+revenue_weights = earned_weights
 
 
 def split(pool_usd, weights):

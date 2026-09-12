@@ -67,7 +67,7 @@ class TestThePool:
         assert pool["negative"] is True
 
 
-class TestRevenueWeights:
+class TestEarnedWeights:
     EARNED = {config.KATERINA: 5667.13, config.AYOKA: 5721.11,
               config.JANE: 1388.17}
 
@@ -75,28 +75,53 @@ class TestRevenueWeights:
         """
         THE TRAP. Katerina and Ayoka split ONE client group 50/50, so
         inverting both their formulas recovers the SAME revenue twice.
-        Adding them made the group look like $34,250 instead of $17,125 and
-        pushed Jane's share of the split down accordingly.
+        Adding them puts gross near $34,250 against a true $18,952 - which
+        under this method inflates HER 5%, since that is what her weight is.
         """
-        weights, gross = distribution.revenue_weights(self.EARNED)
+        weights, gross = distribution.earned_weights(self.EARNED)
         assert 18_000 < gross < 20_000, gross
-        assert gross < 30_000
+        # Her 5% rides on gross, so a doubled gross doubles her share too.
+        assert weights[config.FOUNDER] == pytest.approx(947.59, abs=0.05)
 
-    def test_the_two_who_split_a_group_get_equal_weight(self):
-        weights, _ = distribution.revenue_weights(self.EARNED)
-        assert weights[config.KATERINA] == weights[config.AYOKA]
-
-    def test_the_weights_add_up_to_the_gross_revenue(self):
-        """Her 5% off the top plus the 95% the managers divide."""
-        weights, gross = distribution.revenue_weights(self.EARNED)
-        assert sum(weights.values()) == pytest.approx(gross, abs=0.05)
+    def test_a_manager_is_weighted_by_what_the_sheet_says_they_earned(self):
+        """
+        Weighted on DOLLARS EARNED, not on revenue driven. The two differ,
+        and the difference is the whole point of her instruction, so this
+        pins the one that is meant.
+        """
+        weights, _ = distribution.earned_weights(self.EARNED)
+        assert weights[config.KATERINA] == 5667.13
+        assert weights[config.AYOKA] == 5721.11
+        assert weights[config.JANE] == 1388.17
 
     def test_her_weight_is_the_five_percent_she_takes_off_the_top(self):
-        weights, gross = distribution.revenue_weights(self.EARNED)
+        weights, gross = distribution.earned_weights(self.EARNED)
         assert weights[config.FOUNDER] == pytest.approx(gross * 0.05, abs=0.05)
 
+    def test_five_percent_of_revenue_is_about_seven_percent_of_the_pool(self):
+        """
+        The result that looks wrong and is not, so it is written down.
+
+        On one $1,000 client payment she takes $50 while Katerina and Ayoka
+        take $665 between them. Her 5% is a RATE ON REVENUE; the 80% share is
+        divided on DOLLARS EARNED. Measured in dollars, $50 against $665
+        lands her near 7% of the combined earned pool, not 5%.
+
+        Anyone "fixing" this to read 5% would be changing the method, not
+        correcting a bug.
+        """
+        weights, _ = distribution.earned_weights(self.EARNED)
+        total = sum(weights.values())
+        assert weights[config.FOUNDER] / total == pytest.approx(0.069,
+                                                                abs=0.002)
+
+    def test_one_thousand_pounds_of_client_money_splits_as_she_described(self):
+        assert round(1000 * 0.05, 2) == 50.00
+        assert round(1000 * 0.95 * 0.70, 2) == 665.00
+        assert round(1000 * (0.95 - 0.95 * 0.70), 2) == 285.00
+
     def test_a_quarter_with_no_revenue_does_not_divide_by_zero(self):
-        weights, gross = distribution.revenue_weights({})
+        weights, gross = distribution.earned_weights({})
         assert gross == 0.0
         assert weights == {}
 
@@ -106,7 +131,7 @@ class TestTheSplit:
               config.JANE: 1388.17}
 
     def _rows(self, pool=4442.93):
-        weights, _ = distribution.revenue_weights(self.EARNED)
+        weights, _ = distribution.earned_weights(self.EARNED)
         return distribution.split(pool, weights)
 
     def test_the_whole_pool_is_distributed(self):

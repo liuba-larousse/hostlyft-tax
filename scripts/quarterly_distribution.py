@@ -125,19 +125,23 @@ def main():
     earned = {name: (data or {}).get("usd") or 0.0
               for name, data in reconcile.earnings_by_person(
                   connection, args.year, months=subset).items()}
-    weights, gross = distribution.revenue_weights(earned)
+    weights, gross = distribution.earned_weights(earned)
 
-    print(f"\n{BOLD}WHO DROVE THE REVENUE{OFF}   "
+    print(f"\n{BOLD}WHAT EACH PERSON EARNED{OFF}   "
           f"{' + '.join(months)}, Marcus excluded")
     print("-" * 74)
     print(f"   Gross client revenue this quarter: ${gross:,.2f}")
-    print("   Katerina and Ayoka share one client group, so it is counted")
-    print("   ONCE and halved - adding both their figures would double it.")
-    print("   Your own weight is the 5% you take off the top.\n")
+    print(f"   Combined earned pool:              ${sum(weights.values()):,.2f}")
+    print("   The 80% is divided on DOLLARS EARNED, not on revenue driven.")
+    print("   Your weight is the 5% you take off the top. On a $1,000 client")
+    print("   payment that is $50, where Katerina and Ayoka take $665 between")
+    print("   them - so you land near 7% of the earned pool, not 5%. The two")
+    print("   percentages measure different things.")
+    print("   Katerina and Ayoka share one client group, counted ONCE.\n")
 
     rows = distribution.split(pool["pool_usd"], weights)
-    print(f"   {'person':<24s} {'drove':>11s} {'share':>7s} "
-          f"{'even 20%':>9s} {'by revenue':>11s} {'TOTAL':>10s}")
+    print(f"   {'person':<24s} {'earned':>11s} {'share':>7s} "
+          f"{'even 20%':>9s} {'by earned':>11s} {'TOTAL':>10s}")
     for row in rows:
         print(f"   {row['person']:<24s} ${row['weight_usd']:>10,.2f} "
               f"{row['weight_pct']:>6.1f}% ${row['even_usd']:>8,.2f} "
