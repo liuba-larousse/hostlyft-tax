@@ -610,6 +610,35 @@ Design it to **ask, store the answer, and never ask twice** — the same shape a
 categorisation rules. Store the home office inputs in a settings block she can edit
 without touching code, and re-use them each year.
 
+### Estimating on the jars going out — added 12 September 2026
+
+**Her instruction, and it changes the default.** Tax is estimated on the
+assumption that the **contractor jars are emptied before 31 December**,
+because that money will be paid out. Paying quarterly tax on money she is
+going to deduct anyway simply lends the IRS cash for a year.
+
+`assume_contractor_jars_paid_by_year_end` in `SETTINGS`, default **True**.
+
+**This does not change what is deductible, and finding 4 stands unaltered.**
+A jar is still a label inside her own Wise account; allocating to one still
+deducts nothing. This is a projection about *when* the money leaves, and it
+is conditional on it actually leaving. Both figures are computed every run
+and `calc_tax.py` prints both, side by side, saying which is which.
+
+**Only contractor jars.** Her own jar is an owner draw whenever it is paid,
+and a draw is never deductible at any date — including it would understate
+the tax rather than merely time it differently. On 12 September that is
+$6,440.88 of team jars against $440.28 of hers.
+
+**The 1 December reminder already existed and now carries the consequence.**
+It fires from 1 December with a target of the 20th. Because the estimate
+already assumes the payout, a jar left full is no longer a missed saving —
+it is an **underpayment**, and the alert says so, alongside the safe-harbour
+rule that protects her from penalties if she paid 100% of last year's tax.
+
+At 12 September: tax **$3,446.36** if the jars go out, **$4,356.43** if they
+do not. **$910.07** turns on it.
+
 ### Stage 13 — Scheduling (LAST — and on her main computer)
 
 **Do this only after every other stage is built, tested and working by hand.** She

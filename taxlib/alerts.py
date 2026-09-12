@@ -264,6 +264,28 @@ def jar_alerts(connection, today, tax_year):
         for person, amount in sorted(by_person.items(),
                                      key=lambda item: -item[1]))
 
+    # THIS ALERT IS NOW LOAD-BEARING, NOT JUST ADVISORY.
+    #
+    # Since 2026-09-12 the tax estimate assumes by default that these jars
+    # ARE emptied before 31 December, at her instruction - so the quarterly
+    # payments she has been making all year are already the LOWER figure.
+    # If the money does not go out, she has not merely missed a saving: she
+    # has underpaid, and the alert has to say so in those words.
+    assumed = ""
+    if config.SETTINGS.get("assume_contractor_jars_paid_by_year_end", True):
+        assumed = (
+            "YOUR ESTIMATES HAVE ALREADY ASSUMED THIS\n"
+            f"  Your quarterly payments for {tax_year} were worked out as if\n"
+            f"  these jars were emptied - the lower of the two figures the\n"
+            f"  calculator prints. That was your instruction and it is a\n"
+            f"  reasonable way to estimate.\n\n"
+            f"  But it means that if this money does NOT leave by 31\n"
+            f"  December, you have not just missed a ${cost:,.2f} saving -\n"
+            f"  you have UNDERPAID by about that much, and the deduction\n"
+            f"  moves into {tax_year + 1}.\n\n"
+            f"  Safe harbour still protects you from penalties if you paid\n"
+            f"  100% of last year's total tax. Check that before worrying.\n\n")
+
     urgency = (f"About {days_left} days to the {JARS_TARGET_DAY}th."
                if days_left > 0 else
                "You are past the target date - transfers can take days to "
@@ -282,6 +304,7 @@ def jar_alerts(connection, today, tax_year):
         f"  ${total:,.2f} left in the jars costs roughly ${cost:,.2f} in\n"
         f"  self-employment tax you would not otherwise pay\n"
         f"  ({k.SE_TAX_RATE:.1%} on {k.SE_TAXABLE_SHARE:.2%} of profit).\n\n"
+        f"{assumed}"
         "WHAT TO DO\n"
         f"  Pay out what is genuinely owed before 31 December. {urgency}\n"
         "  Aim for the 20th so a slow transfer still lands in time.\n\n"

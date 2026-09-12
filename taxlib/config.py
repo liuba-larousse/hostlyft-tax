@@ -106,6 +106,27 @@ SETTINGS = {
     # service business run roughly 21-24% OF REVENUE, which can exceed 15.3%
     # of PROFIT. Registering is about being compliant where you live.
     "certificate_of_coverage": False,
+
+    # ESTIMATE TAX AS IF THE CONTRACTOR JARS ARE EMPTIED BEFORE 31 DECEMBER.
+    #
+    # Her instruction, 2026-09-12: that money WILL be paid out this year, so
+    # the year-end deduction will include it and the final bill is lower.
+    # Paying quarterly tax on money she is going to deduct anyway is just
+    # lending the IRS cash for a year.
+    #
+    # IT IS A PROJECTION AND IT IS CONDITIONAL. Nothing has been paid yet.
+    # Allocating to a jar still deducts NOTHING - that has not changed and
+    # is not a setting. If the jars are still full on 31 December, the
+    # deduction falls into the next year and the real bill is the higher
+    # figure. The calculator prints both, every time, and says which is
+    # which.
+    #
+    # Only CONTRACTOR jars. Her own jar is an owner draw whenever it is
+    # paid, and a draw is never deductible at any date - counting it would
+    # understate the tax rather than merely time it differently.
+    #
+    # Set to False to estimate on what has actually been paid to date.
+    "assume_contractor_jars_paid_by_year_end": True,
 }
 
 MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",

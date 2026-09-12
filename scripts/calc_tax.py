@@ -104,12 +104,39 @@ def main():
             print(f"   {YELLOW}This relies on the 12 m2 being used ONLY for "
                   f"work. That is the test people fail.{OFF}")
             print(f"   NET PROFIT AFTER HOME OFFICE   "
-                  f"${result['net_profit']:,.2f}")
+                  f"${result['net_profit_if_jars_stay']:,.2f}")
         elif result.get("home_office_problem"):
             print()
             print(f"{YELLOW}   HOME OFFICE NOT CLAIMED{OFF}")
             for line in result["home_office_problem"].splitlines():
                 print(f"   {line}")
+
+    # ---- the contractor jars, and the condition this estimate rests on ----
+    jars = result.get("contractor_jars") or {}
+    if result.get("jars_assumption_applied"):
+        import datetime as _d
+        today = _d.date.today()
+        deadline = _d.date(args.year, 12, 31)
+        days_left = (deadline - today).days
+
+        print(f"\n{BOLD}   CONTRACTOR JARS — ASSUMED PAID BEFORE 31 DECEMBER"
+              f"{OFF}")
+        for row in jars.get("rows", []):
+            print(f"   {row['jar_name']:<10s} {row['person']:<24s} "
+                  f"${row['amount_usd'] or 0:>9,.2f}")
+        print(f"   {'':<10s} {'owed to the team':<24s} "
+              f"${jars['usd']:>9,.2f}")
+        print(f"   {GREEN}Deducted here because you will pay it out this "
+              f"year.{OFF}")
+        print(f"   {YELLOW}NOTHING HAS BEEN PAID YET. Allocating to a jar "
+              f"deducts nothing —{OFF}")
+        print(f"   {YELLOW}only the money actually leaving does. This is a "
+              f"projection.{OFF}")
+        print(f"   Your own jar is left in: paying yourself is an owner "
+              f"draw, never")
+        print(f"   deductible whenever it happens.")
+        print(f"   NET PROFIT AFTER THE JARS GO OUT   "
+              f"${result['net_profit']:,.2f}")
 
     net_profit = result["net_profit"]
 
@@ -140,6 +167,30 @@ def main():
     if args.paid:
         print(f"   Already paid ${args.paid:,.2f}, leaving ${remaining:,.2f}.")
     print(f"   Per quarter: ${tax.quarterly(result['total'], args.paid):,.2f}")
+
+    if result.get("jars_assumption_applied"):
+        import datetime as _d
+        days_left = (_d.date(args.year, 12, 31)
+                     - _d.date.today()).days
+        jars = result["contractor_jars"]
+        print(f"\n{BOLD}THE TWO NUMBERS, AND WHICH ONE YOU OWE{OFF}")
+        print("-" * 74)
+        print(f"   jars emptied before 31 Dec   "
+              f"${result['tax_if_jars_paid']:>10,.2f}   "
+              f"{GREEN}<- what this estimate uses{OFF}")
+        print(f"   jars still full on 31 Dec    "
+              f"${result['tax_if_jars_stay']:>10,.2f}")
+        print(f"   at stake                     "
+              f"${result['jars_saving_usd']:>10,.2f}")
+        print()
+        print(f"   ${jars['usd']:,.2f} has to actually LEAVE your Wise "
+              f"account by 31 December —")
+        print(f"   {days_left} days from today. Paid on 1 January instead, "
+              f"the deduction lands in")
+        print(f"   the NEXT tax year and you owe the higher figure for this "
+              f"one.")
+        print(f"   The 1 December reminder chases this; aim to be done by "
+              f"about the 20th.")
 
     if not settings.get("certificate_of_coverage"):
         other = tax.estimate(net_profit,

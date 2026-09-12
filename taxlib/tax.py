@@ -40,6 +40,8 @@ BOTH BUSINESSES, ONE CALCULATION
     whole reason for the `business` column.
 """
 
+import datetime as _dt
+
 from taxlib import config, constants_2026 as k, db
 
 
@@ -247,6 +249,51 @@ def quarterly(total_tax, paid_so_far=0.0):
     return _round(max(0.0, total_tax - paid_so_far) / 4)
 
 
+def pending_contractor_jars(connection, tax_year, today=None):
+    """
+    Contractor money sitting in jars that will be deductible once paid out.
+
+    HER INSTRUCTION, 2026-09-12: estimate tax on the assumption that these
+    jars ARE emptied before 31 December, because they will be. That is a
+    reasonable basis for an ESTIMATE - the whole point of a quarterly
+    estimate is to approximate the final bill, and if the money goes out in
+    December the final bill is genuinely lower. Paying tax all year on
+    money she is going to deduct anyway is just lending the IRS cash.
+
+    IT IS A PROJECTION, AND IT IS CONDITIONAL. Nothing has been paid yet.
+    Finding 4 of the plan still holds exactly as written: a jar is a label
+    inside her own Wise account, and allocating to one deducts nothing. If
+    the money is still sitting there on 31 December, the deduction falls
+    into the FOLLOWING year and the real bill is the higher figure. So both
+    numbers are computed and both are shown, always.
+
+    ONLY CONTRACTOR JARS - and this is the part that is easy to get wrong.
+    Her own jar is an owner draw whenever it is paid. A draw is never
+    deductible, at any date, so including it would understate the tax
+    rather than time it differently. Jars carry a `person` only when they
+    belong to somebody on the roster; hers and the admin pots do not.
+
+    Once the tax year is over the assumption cannot come true any more, so
+    it stops being applied and the real figure stands on its own.
+    """
+    # `today` arrives as a date from some callers and an ISO string from
+    # others - the home office path passes a string. Accept both rather
+    # than making every caller convert.
+    today = today or _dt.date.today()
+    if isinstance(today, str):
+        today = _dt.date.fromisoformat(today[:10])
+    if today.year > tax_year:
+        return {"usd": 0.0, "rows": [], "still_possible": False}
+
+    rows = [row for row in db.latest_jar_balances(connection)
+            if row["person"] and (row["amount_usd"] or 0) > 0]
+    return {
+        "usd": db.round_money(sum(row["amount_usd"] or 0 for row in rows)),
+        "rows": rows,
+        "still_possible": True,
+    }
+
+
 def from_database(connection, tax_year, settings=None,
                   include_home_office=True, today=None):
     """
@@ -277,10 +324,33 @@ def from_database(connection, tax_year, settings=None,
     claimed = office["claimed_usd"] if office else 0.0
     net_profit = db.round_money(profit_before - claimed)
 
-    result = estimate(net_profit, settings)
+    # The jar projection, applied like the home office: not a transaction,
+    # so it has no row in `expenses` and must never be given one.
+    active = (settings or config.SETTINGS).get(
+        "assume_contractor_jars_paid_by_year_end", True)
+    jars = pending_contractor_jars(connection, tax_year, today=today)
+    projected_profit = net_profit
+    if active and jars["usd"]:
+        projected_profit = db.round_money(max(0.0, net_profit - jars["usd"]))
+
+    # BOTH are computed, every time. The projected figure is what she plans
+    # and pays quarterly against; the actual figure is what she owes if the
+    # jars are not emptied. Showing only one would hide the condition the
+    # projection rests on.
+    actual = estimate(net_profit, settings)
+    result = estimate(projected_profit, settings) if active else dict(actual)
+
     result["totals"] = totals
     result["net_profit_before_home_office"] = profit_before
     result["home_office"] = office
     result["home_office_problem"] = office_problem
     result["home_office_usd"] = claimed
+
+    result["contractor_jars"] = jars
+    result["jars_assumption_applied"] = bool(active and jars["usd"])
+    result["net_profit_if_jars_stay"] = net_profit
+    result["tax_if_jars_stay"] = actual["total"]
+    result["tax_if_jars_paid"] = result["total"]
+    result["jars_saving_usd"] = db.round_money(
+        actual["total"] - result["total"])
     return result
