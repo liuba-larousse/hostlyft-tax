@@ -283,3 +283,62 @@ def test_a_broken_home_office_setting_does_not_stop_the_tax_estimate(conn, monke
     assert result["home_office_usd"] == 0.0
     assert "ONLY for work" in result["home_office_problem"]
     assert result["self_employment_tax"]["total"] > 0
+
+
+class TestEntertainmentIsZeroNotFifty:
+    """
+    The 2017 Act removed the entertainment deduction outright. Plenty of
+    advice still says 50%, because that is what it was beforehand, and
+    treating it as a cheaper kind of meal is the natural mistake.
+    """
+
+    def test_entertainment_deducts_nothing(self):
+        from taxlib import config
+        assert config.deductible_share("entertainment") == 0.0
+
+    def test_a_meal_is_still_half_and_not_zero(self):
+        from taxlib import config
+        assert config.deductible_share("meals") == 0.50
+
+    def test_a_show_is_entertainment_and_a_restaurant_is_a_meal(self):
+        from taxlib import categorize
+        assert categorize.categorize(
+            "Card transaction of 40.00 EUR issued by Ticketmaster"
+        )[0] == "entertainment"
+        assert categorize.categorize(
+            "Card transaction of 19.50 EUR issued by Le Pacha Kebab"
+        )[0] == "meals"
+
+    def test_entertainment_does_not_swallow_travel(self):
+        """A hotel is travel at 100%, not a night out."""
+        from taxlib import categorize
+        assert categorize.categorize(
+            "Card transaction of 60.48 EUR issued by Bkg*Hotel At Booking.c"
+        )[0] == "travel"
+
+
+class TestTheFiguresWereReadFromTheIrsNotGuessed:
+    """
+    Finding 2 of the plan, applied to Stage 12b. These were carried across
+    planning sessions where irs.gov was blocked, and config.py said so in
+    its own comments until 2026-09-12.
+    """
+
+    def test_the_simplified_home_office_rate_and_cap(self):
+        from taxlib import config
+        assert config.SIMPLIFIED_HOME_OFFICE_RATE_PER_SQFT == 5.00
+        assert config.SIMPLIFIED_HOME_OFFICE_MAX_SQFT == 300
+        assert (config.SIMPLIFIED_HOME_OFFICE_RATE_PER_SQFT
+                * config.SIMPLIFIED_HOME_OFFICE_MAX_SQFT) == 1500
+
+    def test_the_de_minimis_threshold(self):
+        from taxlib import config
+        assert config.DE_MINIMIS_SAFE_HARBOR_USD == 2500.00
+
+    def test_the_mileage_rate_is_absent_rather_than_guessed(self):
+        """
+        It changes most years and was never read. A plausible-looking wrong
+        rate is worse than none, because nothing would ever flag it.
+        """
+        from taxlib import config
+        assert config.STANDARD_MILEAGE_RATE is None

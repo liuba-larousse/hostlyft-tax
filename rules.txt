@@ -86,6 +86,25 @@ meals = restaurant, brasserie, bistro, boulangerie, cafe, café, coffee,
         McDonald, Starbucks, Pret A Manger, Deliveroo, Uber Eats,
         UBER *EATS, Just Eat, Glovo, DoorDash, catering
 
+# --- entertainment ------------------------ [NOT DEDUCTIBLE AT ALL] --------
+# ZERO PERCENT. Not a lower rate - no deduction.
+#
+# The 2017 Act removed the entertainment deduction outright. Before it,
+# entertainment was 50% like meals, which is why plenty of advice still
+# says so. It is wrong for 2026.
+#
+# This block sits ABOVE travel and BELOW meals on purpose. A concert or a
+# match is not travel; a restaurant is still a meal at 50%.
+#
+# THE SPLIT-BILL RULE: food and drink AT an entertainment event stay 50%
+# deductible only if they are billed separately, or shown separately on the
+# same bill. Billed as one lump with the tickets, the whole lot is
+# disallowed. Ask for a separate receipt at the time - it cannot be fixed
+# afterwards.
+entertainment = theatre, theater, cinema, concert, nightclub, golf,
+                stadium, ticketmaster, eventbrite, sporting event,
+                country club, yacht
+
 # --- travel -------------------------------------- [Schedule C line 24a] ---
 travel = airline, hotel, Booking.com, Airbnb, Uber, Lyft, train, flight,
          SNCF, Trainline, Eurostar, Ryanair, easyJet, Air France,

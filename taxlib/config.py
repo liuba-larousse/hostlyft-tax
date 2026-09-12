@@ -224,11 +224,28 @@ HOME_OFFICE = {
 }
 
 # The simplified alternative the IRS offers: a flat rate per square foot,
-# capped. VERIFY BOTH FIGURES against
+# capped.
+#
+# VERIFIED against irs.gov on 2026-09-12, read from the page itself:
+#   "Standard deduction of $5 per square foot of home used for business
+#    (maximum 300 square feet)."
 # https://www.irs.gov/businesses/small-businesses-self-employed/simplified-option-for-home-office-deduction
-# before relying on them - they were not read from the IRS site.
 SIMPLIFIED_HOME_OFFICE_RATE_PER_SQFT = 5.00
 SIMPLIFIED_HOME_OFFICE_MAX_SQFT = 300
+
+# Elect this and anything under it is expensed in the year it was bought,
+# which removes depreciation entirely at her scale. Treas. Reg.
+# 1.263(a)-1(f). VERIFIED 2026-09-12 against
+# https://www.irs.gov/businesses/small-businesses-self-employed/tangible-property-final-regulations
+DE_MINIMIS_SAFE_HARBOR_USD = 2500.00
+
+# The 2026 standard mileage rate is deliberately NOT here. It was never read
+# from the IRS, it changes most years, and guessing it would put a wrong
+# number into a deduction. She lives in France and may have no business
+# vehicle use at all - the plan says ask before building any of this. If
+# mileage is ever wanted, read the rate from
+# https://www.irs.gov/tax-professionals/standard-mileage-rates first.
+STANDARD_MILEAGE_RATE = None
 SQFT_PER_SQM = 10.7639
 
 
@@ -241,12 +258,20 @@ SQFT_PER_SQM = 10.7639
 #
 # BUSINESS MEALS ARE 50% DEDUCTIBLE. The temporary 100% allowance for
 # restaurant meals ran in 2021 and 2022 only and has expired - do not
-# reintroduce it. IRS Publication 463.
+# reintroduce it.
+#
+# VERIFIED 2026-09-12 against IRS Publication 463, which still carries the
+# "50% limit on meals" section: https://www.irs.gov/publications/p463
+#
+# ENTERTAINMENT IS 0%. Not a lower rate - no deduction at all, since the
+# 2017 Act removed it. A meal at an entertainment event is still 50% if it
+# is billed separately; billed together, the whole thing is disallowed.
 #
 # Anything not listed here is treated as 100% deductible.
 
 CATEGORY_DEDUCTIBLE_SHARE = {
     "meals": 0.50,
+    "entertainment": 0.00,
 }
 
 
