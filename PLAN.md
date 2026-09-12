@@ -526,6 +526,73 @@ Macs she owns, never via email or cloud sync.
    credentials left on a secondary machine are a real exposure — put it on the
    checklist, not in her memory.
 
+### Stage 14 — Quarterly profit distribution (bonus split)
+
+Added after Stages 10–12 were built. At each quarter end Liuba distributes the
+Hostlyft account between herself and the three **revenue managers** — Katerina,
+Ayoka and Jane. **Sunniva is excluded**: she is hourly, not a revenue manager.
+
+**The pool:**
+
+```
+Distributable = Hostlyft Wise balance, all currencies converted to USD
+              − sum of ALL personal jars  (already-distributed money)
+              − $1,000 operating buffer   (her choice; ~1 quarter of subscriptions)
+```
+
+**The split** — both figures are TENTATIVE and flagged for her to revisit; neither
+affects the tax calculation, only who receives what:
+
+- **Founder share: 25%** off the top to Liuba (tentative)
+- **Remaining 75%** split between Katerina, Ayoka and Jane **proportional to each
+  one's earned Hostlyft income for that quarter**, using the existing sheet logic:
+  - Katerina = KA group revenue × 0.95 × 0.70 × 0.50
+  - Ayoka    = KA group revenue × 0.95 × 0.70 × 0.50
+  - Jane     = her clients' revenue × 0.95 × 0.80
+  - `bonus_i = team_pool × (earned_i / Σ earned of the three)`
+
+Proportional was chosen as the tentative default because it needs no new data,
+already reflects both client count and client value, and self-corrects when a
+client moves between managers. Unit-count and revenue-generated alternatives were
+considered and rejected for now — both need attribution data that is not tracked.
+
+**Tax treatment — this is the part that matters and is easy to get wrong:**
+
+1. **Team bonuses are deductible business expenses**, but only **when actually
+   withdrawn** — the same jar rule as everywhere else. A bonus declared at quarter
+   end and left sitting in a jar is not yet an expense.
+2. **Liuba's own share is NOT deductible.** It is an owner draw from a disregarded
+   entity. It does not reduce taxable profit at all.
+3. **The $1,000 buffer is taxable profit too** — retained business cash is still
+   hers for tax purposes. ~$141/quarter of SE tax on money she has not taken.
+4. **Q4 timing is critical.** The December distribution must be *withdrawn* before
+   31 December or the deduction falls into the following year. Fold this into the
+   existing 1 December jars alert.
+5. Bonus payments **count toward Katerina's 1099-NEC total** (already past $600 at
+   $3,102.05 of withdrawals).
+
+**The asymmetry, recorded so it is not forgotten:** their bonuses are deductible,
+hers is not and is taxed at 14.13% (SE tax; income tax ≈ $0 via FEIE). On an
+illustrative $10,000 pool at a 25% founder share she nets ~$2,147 while each
+revenue manager nets ~$2,500 — she is the lowest-paid of the four despite managing
+the team and carrying all the tax. **The break-even founder share is 28%**: at 28%
+her take-home equals each revenue manager's. Surface this whenever she revisits
+the number.
+
+**Correction already made to her, do not re-litigate:** she believed paying tax
+from the business account would mean the team "pays her taxes from their income".
+It would not — contractor payments are deducted *before* her profit is computed,
+so she never pays tax on their income. And a single-member LLC is disregarded, so
+which account pays is tax-neutral. She has chosen to pay from personal anyway,
+which is fine. Do not treat the Hostlyft balance as the team's money: their
+earned-but-unwithdrawn share is a **liability she owes**, not their asset.
+
+**Build:** `scripts/quarterly_distribution.py` — computes the pool, the split, and
+the tax consequence of each; writes a `Distributions` tab to the Google Sheet
+(new tab, never touching existing ones); records each distribution so a re-run
+does not double-count. Both the founder percentage and the buffer live in the
+settings block so she can change them without touching code.
+
 ---
 
 ## Tests
@@ -553,6 +620,11 @@ Each stage ships tests runnable in one command:
     period; income, expense and contractor totals must be identical each time
 15. A simulated failure (bad token) produces an email naming the credential, not a
     stack trace; the heartbeat fires when no sync has succeeded in 7 days
+16. Quarterly distribution on a $10,000 pool at a 25% founder share → $2,500 to
+    Liuba (non-deductible), $7,500 split proportionally (deductible on withdrawal);
+    re-running the same quarter does not double-count
+17. Business meals are recorded at **50% deductible**, entertainment at 0%, and
+    personal meals excluded entirely
 
 ## Out of scope — flag, don't guess
 
