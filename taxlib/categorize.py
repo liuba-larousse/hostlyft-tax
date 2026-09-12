@@ -53,6 +53,27 @@ def load_rules(path=None):
     return rules
 
 
+def _match_text(text):
+    """
+    Flatten a description so a rule matches however the bank spaced it.
+
+    Card networks pad and punctuate merchant names unpredictably. Wise
+    writes Uber Eats as "Uber   * Eats" - three spaces, and a star with a
+    space after it. rules.txt spells it "Uber Eats" and "UBER *EATS", and
+    NEITHER of those is a substring of what Wise actually sends. The row
+    then fell through to the travel rule's bare "Uber" and was deducted as
+    a taxi at 100% instead of a meal at 50%.
+
+    So before matching, both the description and the rule word are reduced
+    to the same shape: accents stripped, lower-cased, "*" and "#" treated
+    as spaces, and every run of whitespace collapsed to one. "Uber   * Eats"
+    and "UBER *EATS" both become "uber eats".
+    """
+    flattened = config._plain(text or "").lower()
+    flattened = flattened.replace("*", " ").replace("#", " ")
+    return re.sub(r"\s+", " ", flattened).strip()
+
+
 def categorize(text, rules=None, vendor=None):
     """
     Work out the category for one expense.
@@ -61,11 +82,11 @@ def categorize(text, rules=None, vendor=None):
     can show WHY something was categorised, rather than asking for trust.
     """
     rules = rules if rules is not None else load_rules()
-    haystack = config._plain(f"{vendor or ''} {text or ''}").lower()
+    haystack = _match_text(f"{vendor or ''} {text or ''}")
 
     for category, words in rules:
         for word in words:
-            needle = config._plain(word).lower()
+            needle = _match_text(word)
             # whole-word for short words, substring for longer distinctive
             # ones - "Quo" must not match "quote", but "Multicurrency
             # Settlement" should match inside a longer description.

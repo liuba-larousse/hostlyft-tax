@@ -419,3 +419,56 @@ def test_email_hosting_is_grouped_with_the_phone_line():
     from taxlib import categorize
     assert categorize.categorize("NEO [Other Services]")[0] == "phone and internet"
     assert categorize.categorize("Quo openphone")[0] == "phone and internet"
+
+
+class TestTheBanksSpacingMustNotDecideTheDeduction:
+    """
+    A meal is 50% deductible; a taxi is 100%. So whether "Uber Eats" is
+    recognised is worth real money, and it turned on whitespace.
+
+    Wise writes the merchant as "Uber   * Eats" - three spaces, then a star
+    with a space after it. rules.txt spells it "Uber Eats" and "UBER *EATS",
+    and neither is a substring of what Wise sends. The row fell through to
+    the travel rule's bare "Uber" and three food deliveries ($337.95) were
+    deducted as taxis at 100% instead of meals at 50%.
+
+    rules.txt already carried a comment anticipating exactly this and
+    ordering meals above travel to prevent it. The ordering was right; the
+    spelling could not match. That is why this is tested on the real string
+    the bank sends rather than on a tidy one.
+    """
+
+    WISE_UBER_EATS = ("Card transaction of 119.88 EUR issued by "
+                      "Uber   * Eats Pending AMSTERDAM")
+
+    def test_uber_eats_as_wise_actually_writes_it_is_a_meal(self):
+        from taxlib import categorize
+        category, _ = categorize.categorize(self.WISE_UBER_EATS)
+        assert category == "meals"
+
+    def test_an_ordinary_uber_ride_is_still_travel(self):
+        """The fix must not sweep genuine taxi rides into meals."""
+        from taxlib import categorize
+        category, _ = categorize.categorize(
+            "Card transaction of 17.68 EUR issued by Uber AMSTERDAM")
+        assert category == "travel"
+        category, _ = categorize.categorize(
+            "Card transaction of 13.94 EUR issued by "
+            "Ubr* Pending.uber.com AMSTERDAM")
+        assert category == "travel"
+
+    def test_a_star_in_the_merchant_name_no_longer_hides_the_vendor(self):
+        """Same root cause, different category - these were uncategorised."""
+        from taxlib import categorize
+        assert categorize.categorize(
+            "Card transaction of 108.00 USD issued by "
+            "Anthropic* Claude Sub ANTHROPIC.COM")[0] == "software"
+        assert categorize.categorize(
+            "Card transaction of 6.38 EUR issued by "
+            "Godaddy#4123750568 AMSTERDAM")[0] == "software"
+
+    def test_airbnb_with_a_star_is_still_travel_not_something_else(self):
+        from taxlib import categorize
+        assert categorize.categorize(
+            "Card transaction of 1,063.96 USD issued by "
+            "Airbnb * Hmsp344cs4 AIRBNB.COM")[0] == "travel"
