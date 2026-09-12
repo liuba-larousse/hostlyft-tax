@@ -92,7 +92,7 @@ from taxlib import config
 #      + wise_jars, contractor_ledger
 #   3  + jar_movements: money moved INTO and OUT OF each jar
 #   4  + contractor_forms: whether each person's W-9 or W-8BEN is on file
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 # ===========================================================================
@@ -500,6 +500,45 @@ CREATE TABLE IF NOT EXISTS contractor_forms (
 );
 
 
+-- ----------------------------------------------------- quarterly distributions
+-- Stage 14. What was declared for each person each quarter.
+--
+-- DECLARING IS NOT PAYING, AND ONLY PAYING IS DEDUCTIBLE.
+-- A bonus recorded here is a decision, not yet a cost. It becomes a
+-- deduction when the money actually leaves - the same jar rule as
+-- everywhere else. withdrawn_on records when that happened, and is NULL
+-- until it does.
+--
+-- One row per person per quarter, so re-running a quarter revises it
+-- instead of paying twice.
+CREATE TABLE IF NOT EXISTS distributions (
+    id                INTEGER PRIMARY KEY,
+
+    tax_year          INTEGER NOT NULL,
+    quarter           INTEGER NOT NULL,      -- 1-4, US ESTIMATED TAX quarters
+    person            TEXT    NOT NULL,
+
+    pool_usd          REAL    NOT NULL,      -- the whole pool that quarter
+    even_usd          REAL    NOT NULL,      -- their cut of the flat share
+    weight_usd        REAL    NOT NULL,      -- revenue they drove
+    proportional_usd  REAL    NOT NULL,      -- their cut of the revenue share
+    total_usd         REAL    NOT NULL,
+
+    -- 0 for her own share: an owner draw is never deductible.
+    deductible        INTEGER NOT NULL DEFAULT 1,
+    withdrawn_on      TEXT,                  -- NULL until the money leaves
+    notes             TEXT,
+
+    created_at        TEXT    NOT NULL,
+    updated_at        TEXT    NOT NULL,
+
+    UNIQUE (tax_year, quarter, person)
+);
+
+CREATE INDEX IF NOT EXISTS idx_distributions_quarter
+    ON distributions (tax_year, quarter);
+
+
 -- ------------------------------------------------------------------- meta
 -- Internal bookkeeping: which version of the layout above this file uses.
 CREATE TABLE IF NOT EXISTS meta (
@@ -592,11 +631,26 @@ def _migrate_3_to_4(connection):
     return ["added contractor_forms (whether each W-9 / W-8BEN is on file)"]
 
 
+def _migrate_4_to_5(connection):
+    """
+    Version 4 -> 5.
+
+    Adds distributions, for Stage 14. A new table, already built by the
+    CREATE TABLE above, so there is nothing to copy and no row to change.
+
+    Not pre-filled. An empty table means no quarter has been distributed
+    yet, which is the truth; writing zero rows per person per quarter would
+    read as "distributed nothing", which is a different claim.
+    """
+    return ["added distributions (the quarterly profit split)"]
+
+
 # version to reach -> the function that gets there
 MIGRATIONS = {
     2: _migrate_1_to_2,
     3: _migrate_2_to_3,
     4: _migrate_3_to_4,
+    5: _migrate_4_to_5,
 }
 
 
@@ -841,6 +895,53 @@ def upsert_expense(connection, *, source, source_id, date, amount, currency,
         protect_conversion=True,
         protect_review=True,
     )
+
+
+def upsert_distribution(connection, *, tax_year, quarter, person, pool_usd,
+                        even_usd, weight_usd, proportional_usd, total_usd,
+                        deductible=True, withdrawn_on=None, notes=None):
+    """
+    Record one person's share for one quarter.
+
+    Keyed on (year, quarter, person), so re-running a quarter REVISES the
+    figure rather than adding a second one. That is the whole reason this is
+    stored: without it, running the September distribution twice would look
+    like paying everybody twice.
+
+    withdrawn_on is deliberately NOT overwritten on a re-run. Once the money
+    has actually left, that is a fact about the world; recomputing the split
+    must not quietly un-pay somebody.
+    """
+    _upsert(
+        connection, "distributions",
+        {"tax_year": tax_year, "quarter": quarter, "person": person},
+        {
+            "pool_usd": pool_usd,
+            "even_usd": even_usd,
+            "weight_usd": weight_usd,
+            "proportional_usd": proportional_usd,
+            "total_usd": total_usd,
+            "deductible": 1 if deductible else 0,
+            "notes": notes,
+        },
+    )
+    if withdrawn_on:
+        connection.execute(
+            "UPDATE distributions SET withdrawn_on = ?, updated_at = ? "
+            "WHERE tax_year = ? AND quarter = ? AND person = ?",
+            (withdrawn_on, _now(), tax_year, quarter, person))
+    return connection
+
+
+def distributions_for(connection, tax_year, quarter=None):
+    """Every recorded share for a year, or for one quarter of it."""
+    if quarter is None:
+        return connection.execute(
+            "SELECT * FROM distributions WHERE tax_year = ? "
+            "ORDER BY quarter, person", (tax_year,)).fetchall()
+    return connection.execute(
+        "SELECT * FROM distributions WHERE tax_year = ? AND quarter = ? "
+        "ORDER BY person", (tax_year, quarter)).fetchall()
 
 
 def upsert_payout(connection, *, payout_id, arrival_date, amount, currency,

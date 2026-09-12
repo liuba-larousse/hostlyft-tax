@@ -108,6 +108,47 @@ SETTINGS = {
     "certificate_of_coverage": False,
 }
 
+MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+# Names used in one place so a typo cannot quietly drop somebody from a split.
+FOUNDER = "Liubov Kapitulskaya"
+KATERINA = "Katerina Mrvova"
+AYOKA = "Yetunde Olaniyan"
+JANE = "Evgeniya Dyatlovskaya"
+
+
+# ===========================================================================
+#  STAGE 14 - THE QUARTERLY PROFIT DISTRIBUTION
+# ===========================================================================
+#
+# CHANGE THESE FREELY. They decide who receives what, and nothing else -
+# not one figure on the tax return moves when you edit them. What IS
+# deductible is fixed by law and lives in distribution.py, not here.
+#
+# Her rule, given 2026-09-12, replacing an earlier flat 25% founder share:
+#     20% shared EVENLY between the four of them
+#     80% in proportion to who drove the revenue, with Marcus left out
+#
+# Marcus is excluded because that work is hers alone, done outside Hostlyft.
+# Including it would hand the team a share of income they had no part in.
+#
+# Sunniva is not a participant. She is hourly, not a revenue manager, and is
+# paid for her time rather than out of profit.
+#
+# WHAT COUNTS AS REVENUE SHE DROVE: the 5% she takes off the top of every
+# client payment - her own answer when asked. It makes the weights a true
+# partition of gross client revenue: her 5%, and the 95% the managers split.
+
+DISTRIBUTION = {
+    "even_share": 0.20,          # split equally between the participants
+    "proportional_share": 0.80,  # split by revenue driven (must total 1.0)
+    "operating_buffer_usd": 1000.00,   # kept back, ~a quarter of subscriptions
+    "founder_off_the_top": 0.05,       # her cut before the group percentages
+    "participants": [FOUNDER, KATERINA, AYOKA, JANE],
+}
+
+
 # ===========================================================================
 #  THE TEAM
 # ===========================================================================

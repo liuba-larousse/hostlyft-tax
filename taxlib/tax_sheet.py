@@ -367,6 +367,57 @@ def simple_tab(title, notes, headers, rows, money_columns, empty_message=None):
     return tab
 
 
+def distributions_tab(connection, year):
+    """
+    Stage 14 - what each quarter's profit split came to.
+
+    Two columns carry the whole tax point and are worth the space:
+
+      DEDUCTIBLE?  no for her own share. A single-member LLC is disregarded,
+                   so paying herself is an owner draw and reduces taxable
+                   profit by nothing.
+      WITHDRAWN    blank until the money actually leaves. A bonus sitting in
+                   a jar at the year end is not a deduction that year, and
+                   the sheet should show that rather than imply it is done.
+    """
+    from taxlib import distribution
+
+    rows = []
+    for row in db.distributions_for(connection, year):
+        months = "+".join(
+            distribution.TAX_QUARTER_MONTHS[row["quarter"]])
+        rows.append([
+            f"Q{row['quarter']}", months, row["person"],
+            money(row["weight_usd"]), money(row["even_usd"]),
+            money(row["proportional_usd"]), money(row["total_usd"]),
+            "no — owner draw" if not row["deductible"] else "yes, once paid",
+            row["withdrawn_on"] or "NOT YET",
+            money(row["pool_usd"]),
+        ])
+
+    return simple_tab(
+        f"Quarterly profit distribution — {year}",
+        ["US ESTIMATED TAX QUARTERS, NOT CALENDAR ONES: Q1 Jan–Mar, "
+         "Q2 Apr–May, Q3 Jun–Aug, Q4 Sep–Dec. Run just before each "
+         "quarterly estimate is filed.",
+         "The pool is every Hostlyft balance converted to USD, less every "
+         "jar (already set aside for a person, hers included), less the "
+         "$1,000 operating buffer.",
+         "20% is shared equally between the four; 80% goes by revenue "
+         "driven. Marcus is excluded — that work is hers alone. Sunniva is "
+         "not in the split; she is hourly.",
+         "A TEAM BONUS IS DEDUCTIBLE ONLY ONCE WITHDRAWN. Declared and left "
+         "in a jar, it is not yet a cost. Her own share is never "
+         "deductible.",
+         "Katerina and Ayoka share one client group, so its revenue is "
+         "counted once and halved — which is why their weights are equal."],
+        ["Quarter", "Months", "Person", "Revenue driven", "Even 20%",
+         "By revenue 80%", "TOTAL", "Deductible?", "Withdrawn", "Pool"],
+        rows, money_columns=[3, 4, 5, 6, 9],
+        empty_message="No distribution has been recorded yet — run "
+                      "scripts/quarterly_distribution.py")
+
+
 def build_all(connection, year, built_on):
     data = collect(connection, year)
 
@@ -380,6 +431,8 @@ def build_all(connection, year, built_on):
 
     tabs = {"Summary": summary_tab(data, year, built_on)}
     tabs.update(month_tabs(connection, data, year))
+
+    tabs["Distributions"] = distributions_tab(connection, year)
 
     tabs["Income"] = simple_tab(
         "Every receipt, at GROSS",
