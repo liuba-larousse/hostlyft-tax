@@ -463,19 +463,26 @@ def form_lines_tab(connection, year, result):
     """
     from taxlib import filings
 
-    from taxlib import tax as _tax
-
     totals = result["totals"]
 
-    # A RETURN REPORTS WHAT HAPPENED, NOT WHAT IS PLANNED.
+    # ONE BASIS, THE SAME ONE AS EVERYWHERE ELSE: the contractor jars are
+    # paid out before 31 December.
     #
-    # The headline estimate assumes the contractor jars are emptied before
-    # 31 December, which is right for working out quarterly payments. It is
-    # NOT right here: these are the numbers that go on a filed form, and on
-    # the day she files, the jars either went out or they did not. So every
-    # figure below is recomputed on the actual position.
-    actual_profit = result.get("net_profit_if_jars_stay")
-    actual = _tax.estimate(actual_profit)
+    # A first version of this tab used the jars-stay figures instead,
+    # reasoning that a filed return reports what happened rather than what
+    # is planned. That was wrong, and she said so. By the time the return
+    # is filed - January at the earliest - those payouts will be REAL
+    # contractor expenses sitting in the database, and this tab is rebuilt
+    # on every run. The projection is not a different basis; it is an early
+    # view of the same number.
+    #
+    # It also left line 11 at the withdrawals so far while the net profit
+    # came from somewhere else, so the form did not even add up.
+    #
+    # Everything below therefore takes result["net_profit"] and
+    # result["total"] - the calculator's own headline - and a test asserts
+    # they match, so the two can never drift apart again.
+    pending_jars = (result.get("contractor_jars") or {}).get("usd") or 0.0
 
     tab = Tab(money_columns=[3])
     tab.title(f"How to fill each form - {year}")
@@ -488,10 +495,16 @@ def form_lines_tab(connection, year, result):
              "this tab.")
     tab.note("Line NUMBERS shift between years; the line LABEL does not. If "
              "a number does not match your form, match the label.")
-    tab.note("THESE ARE THE ACTUAL FIGURES, not the quarterly estimate. The "
-             "estimate assumes the contractor jars are emptied before 31 "
-             "December; a filed return reports what really happened. If the "
-             "jars do go out, come back and rebuild this before filing.")
+    tab.note("THE CONTRACTOR JARS ARE COUNTED AS PAID, the same assumption "
+             "the whole calculator uses. They will be real contractor "
+             "expenses once the money leaves, and this tab is rebuilt every "
+             "run, so by filing time these figures will simply be the "
+             "actuals.")
+    tab.note("IF THE JARS ARE STILL FULL ON 31 DECEMBER, this is wrong and "
+             "so is everything else: the deduction moves into the next year, "
+             "net profit rises to "
+             f"${result.get('net_profit_if_jars_stay') or 0:,.2f} and tax to "
+             f"${result.get('tax_if_jars_stay') or 0:,.2f}. Empty them.")
     tab.blank()
 
     tab.head("Form", "Line", "What it is called on the form", "Amount",
@@ -525,29 +538,38 @@ def form_lines_tab(connection, year, result):
         elif share != 1.0:
             source = (f"${row['usd']:,.2f} spent, at {share:.0%} - "
                       f"the form wants the deductible figure")
+        if row["category"] == "contractor" and pending_jars:
+            tab.row("Schedule C", number, label or line,
+                    money(deductible + pending_jars),
+                    f"${deductible:,.2f} already withdrawn PLUS "
+                    f"${pending_jars:,.2f} sitting in their jars, which is "
+                    f"deductible once it leaves")
+            continue
         tab.row("Schedule C", number, label or line, money(deductible),
                 source)
     tab.row("Schedule C", "28", "Total expenses",
-            money(totals["deductible_expenses_usd"]),
-            "the sum above - meals already halved, entertainment at zero")
+            money(totals["deductible_expenses_usd"] + pending_jars),
+            "the sum above - meals halved, entertainment at zero, jars "
+            "counted as paid")
     tab.row("Schedule C", "29", "Tentative profit",
-            money(totals["income_usd"] - totals["deductible_expenses_usd"]),
+            money(totals["income_usd"] - totals["deductible_expenses_usd"]
+                  - pending_jars),
             "line 1 minus line 28")
     office = result.get("home_office_usd") or 0
     tab.row("Schedule C", "30", "Expenses for business use of your home",
             money(office), "from Form 8829 - the actual-cost method wins")
     tab.row("Schedule C", "31", "NET PROFIT",
-            money(result.get("net_profit_if_jars_stay")),
+            money(result.get("net_profit")),
             "line 29 minus line 30. Schedule SE starts here.")
     tab.blank()
 
     # ---- Schedule SE --------------------------------------------------
-    net = result.get("net_profit_if_jars_stay") or 0
+    net = result.get("net_profit") or 0
     tab.row("Schedule SE", "2", "Net profit from Schedule C", money(net),
             "Schedule C line 31")
     tab.row("Schedule SE", "4a", "Multiply line 2 by 92.35%",
             money(round(net * 0.9235, 2)), "IRC 1402(a)(12)")
-    se_total = (actual.get("self_employment_tax") or {}).get("total", 0.0)
+    se_total = (result.get("self_employment_tax") or {}).get("total", 0.0)
     tab.row("Schedule SE", "12", "Self-employment tax", money(se_total),
             "15.3% - and the FEIE does NOT reduce it")
     tab.row("Schedule SE", "13", "Deductible half of it",
@@ -563,7 +585,7 @@ def form_lines_tab(connection, year, result):
             "", "France, full year - only you can state the dates")
     tab.row("Form 1040", "YOU", "Name, SSN/ITIN, address", "",
             "and on MFS, your husband's name and SSN too")
-    tab.row("Form 1040", "-", "Total tax", money(actual.get("total")),
+    tab.row("Form 1040", "-", "Total tax", money(result.get("total")),
             "essentially all self-employment tax; income tax is $0")
     tab.blank()
 

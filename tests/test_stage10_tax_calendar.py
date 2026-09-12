@@ -191,12 +191,19 @@ class TestTheFormWorksheet:
         from taxlib import tax_sheet
         assert "0" in tax_sheet.SCHEDULE_C["entertainment"]
 
-    def test_the_worksheet_uses_actual_figures_not_the_jar_projection(self):
+    def test_the_worksheet_is_on_the_same_basis_as_the_calculator(self):
         """
-        The quarterly estimate assumes the jars are emptied before 31
-        December. A FILED RETURN reports what actually happened - on the
-        day she files, the jars either went out or they did not. Mixing the
-        two put a projected SE tax beside an actual net profit.
+        THE GUARD AGAINST THE MISTAKE I ALREADY MADE ONCE.
+
+        Her instruction is that the contractor jars count as paid, because
+        they will be. A first version of this tab used the jars-STAY
+        figures instead, reasoning that a filed return reports what
+        happened rather than what is planned. Wrong, and she caught it: by
+        filing time those payouts are real expenses in the database, so the
+        projection is an early view of the same number, not another basis.
+
+        This asserts the tab's bottom line IS the calculator's headline, so
+        the two cannot drift apart again whichever way the setting is set.
         """
         from taxlib import db, tax
         conn = db.init_db()
@@ -205,8 +212,34 @@ class TestTheFormWorksheet:
         profit = [r for r in rows if len(r) > 3 and r[1] == "31"][0][3]
         se = [r for r in rows if len(r) > 3 and r[0] == "Schedule SE"
               and r[1] == "12"][0][3]
-        assert profit == result["net_profit_if_jars_stay"]
-        assert abs(se - result["tax_if_jars_stay"]) < 1.0
+        assert profit == result["net_profit"]
+        assert abs(se - result["total"]) < 1.0
+
+    def test_contract_labor_includes_the_jars_about_to_be_paid(self):
+        """
+        The knock-on I missed first time. If the jars count as paid, they
+        are contractor EXPENSE - line 11 has to carry them, or the form
+        does not add up to its own net profit.
+        """
+        from taxlib import db, tax
+        conn = db.init_db()
+        result = tax.from_database(conn, 2026)
+        jars = (result.get("contractor_jars") or {}).get("usd") or 0
+        rows = self._tab().rows
+        withdrawn = conn.execute(
+            "SELECT COALESCE(SUM(amount_usd), 0) FROM expenses WHERE "
+            "excluded = 0 AND category = 'contractor' AND tax_year = 2026"
+        ).fetchone()[0]
+        line11 = [r for r in rows if len(r) > 3 and r[1] == "11"][0][3]
+        assert abs(line11 - (withdrawn + jars)) < 0.05
+
+    def test_the_schedule_c_lines_actually_add_up(self):
+        """Line 1 minus line 28 minus line 30 must equal line 31."""
+        rows = self._tab().rows
+        def line(n):
+            return [r for r in rows
+                    if len(r) > 3 and r[0] == "Schedule C" and r[1] == n][0][3]
+        assert abs((line("1") - line("28") - line("30")) - line("31")) < 0.05
 
     def test_deductible_amounts_are_shown_not_gross_spend(self):
         """

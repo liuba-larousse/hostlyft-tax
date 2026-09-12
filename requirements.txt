@@ -58,3 +58,4 @@ pytest>=8.0,<9.0
 #   python-dotenv  - reading the secrets file is ~20 lines, taxlib/config.py
 #                    does it with Python's built-in tools. One less thing to
 #                    install, one less thing to break.
+pypdf>=4.0    # fills the 1040-ES voucher amounts
