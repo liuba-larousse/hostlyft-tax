@@ -185,10 +185,30 @@ def _refund_of_claimed_spending(connection, *, description, amount, currency):
     if not candidates:
         return None
 
+    # A MERCHANT, NEVER A PERSON.
+    #
+    # Contractors are sometimes paid from the personal account, so Olaide,
+    # Katerina and Yetunde all appear as vendors on personal rows. Without
+    # this guard, money arriving from her HUSBAND read as a merchant refund
+    # - a EUR 3,689 transfer on 2026-06-03 among them. That is household
+    # money between spouses, which her rule says is never read, and calling
+    # it a refund would both breach that and silently alter a deduction.
+    #
+    # Returned contractor payments are a real thing, but they are a question
+    # for the contractor ledger and for her, not something to infer from the
+    # direction of a transfer.
+    for candidate in candidates:
+        try:
+            if config.match_contractor(candidate):
+                return None
+        except config.AmbiguousContractor:
+            return None
+
     rows = connection.execute(
         "SELECT DISTINCT vendor, category FROM expenses "
         "WHERE source_id LIKE 'personal:%' AND vendor IS NOT NULL "
-        "AND vendor != '' AND amount > 0").fetchall()
+        "AND vendor != '' AND amount > 0 "
+        "AND category NOT IN ('contractor', 'bank fees')").fetchall()
 
     for candidate in candidates:
         flat = categorize._match_text(candidate)
@@ -689,7 +709,18 @@ def build_records(connection, transactions, *, profile_label, business,
                     currency=currency)
                 if refund:
                     expenses.append({
-                        "source": "wise", "source_id": source_id,
+                        # ":refund" MATTERS - IT IS NOT DECORATION.
+                        #
+                        # Wise reverses a card transaction under the SAME
+                        # referenceNumber as the original:
+                        #   2026-08-16 CREDIT  25.50 EUR CARD-4200064313
+                        #   2026-08-16 DEBIT  -25.50 EUR CARD-4200064313
+                        # Rows are keyed on "profile:reference", so without
+                        # a suffix the refund and the charge are the same
+                        # key and one silently overwrites the other. Six of
+                        # seven refunds were lost that way on the first run.
+                        "source": "wise",
+                        "source_id": f"{source_id}:refund",
                         "date": date, "amount": -abs(amount),
                         "currency": currency, "business": business,
                         "amount_usd": (-abs(amount) if currency == "USD"

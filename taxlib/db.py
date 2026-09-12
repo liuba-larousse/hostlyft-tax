@@ -689,8 +689,13 @@ def table_names(connection):
 # handling on a re-import - see _upsert() below.
 _CONVERSION_COLUMNS = ("amount_usd", "fx_rate", "fx_date")
 
+# What a human decided about a row, as opposed to what the bank said about it.
+# An import knows the second and must never overwrite the first.
+_REVIEW_COLUMNS = ("needs_review", "review_note", "excluded", "exclusion_reason")
 
-def _upsert(connection, table, keys, values, protect_conversion=False):
+
+def _upsert(connection, table, keys, values, protect_conversion=False,
+            protect_review=False):
     """
     Shared machinery behind the three upsert functions below.
 
@@ -733,6 +738,16 @@ def _upsert(connection, table, keys, values, protect_conversion=False):
                 f"  AND {table}.currency = excluded.currency"
                 f"  THEN {table}.{column}"
                 f" ELSE NULL END"
+            )
+        elif protect_review and column in _REVIEW_COLUMNS:
+            # A row that was flagged and has since been reviewed carries a
+            # decision she made. The import must leave it alone.
+            assignments.append(
+                f"{column} = CASE"
+                f" WHEN {table}.review_note IS NOT NULL"
+                f"  AND {table}.needs_review = 0"
+                f"  THEN {table}.{column}"
+                f" ELSE excluded.{column} END"
             )
         else:
             assignments.append(f"{column} = excluded.{column}")
@@ -782,6 +797,7 @@ def upsert_income(connection, *, source, source_id, date, amount, currency,
             "review_note": review_note,
         },
         protect_conversion=True,
+        protect_review=True,
     )
 
 
@@ -823,6 +839,7 @@ def upsert_expense(connection, *, source, source_id, date, amount, currency,
             "review_note": review_note,
         },
         protect_conversion=True,
+        protect_review=True,
     )
 
 

@@ -450,3 +450,83 @@ def test_an_owners_draw_is_not_a_deductible_expense(conn):
 
     assert db.totals(conn, 2026)["expenses_usd"] == 0.00
     assert conn.execute("SELECT COUNT(*) FROM expenses").fetchone()[0] == 1
+
+
+class TestAnImportMustNotOverwriteWhatSheDecided:
+    """
+    The same trap as the currency-conversion guard, one step further on.
+
+    She works through the flagged rows and says which meals were business
+    and which trips to drop. Then the importer runs again and re-flags every
+    one, because the bank still cannot tell a business lunch from a personal
+    one. It happened for real on 2026-09-12: a re-import silently reset 45
+    reviewed rows, including all 18 meals she had just confirmed.
+
+    Survivable while imports were run by hand. Under the daily sync of
+    Stage 13 it would wipe her decisions nightly and she could never finish
+    reviewing anything.
+    """
+
+    @staticmethod
+    def _row(conn, **kw):
+        from taxlib import db
+        db.upsert_expense(conn, source="wise", source_id="personal:CARD-1",
+                          date="2026-07-01", amount=140.75, currency="USD",
+                          amount_usd=140.75, category="meals",
+                          vendor="Uber Eats", description="food", **kw)
+        conn.commit()
+
+    def test_a_reviewed_row_is_not_re_flagged_by_a_later_import(self):
+        from taxlib import db
+        conn = db.init_db(":memory:")
+        self._row(conn, needs_review=True, review_note="is this business?")
+        conn.execute("UPDATE expenses SET needs_review = 0, "
+                     "review_note = 'confirmed business by you'")
+        conn.commit()
+        self._row(conn, needs_review=True, review_note="is this business?")
+        row = conn.execute("SELECT needs_review, review_note "
+                           "FROM expenses").fetchone()
+        assert row["needs_review"] == 0
+        assert row["review_note"] == "confirmed business by you"
+
+    def test_a_row_she_dropped_stays_dropped(self):
+        from taxlib import db
+        conn = db.init_db(":memory:")
+        self._row(conn, needs_review=True, review_note="is this business?")
+        conn.execute("UPDATE expenses SET excluded = 1, needs_review = 0, "
+                     "review_note = 'you dropped this', "
+                     "exclusion_reason = 'personal'")
+        conn.commit()
+        self._row(conn, needs_review=True, review_note="is this business?")
+        row = conn.execute("SELECT excluded, exclusion_reason "
+                           "FROM expenses").fetchone()
+        assert row["excluded"] == 1
+        assert row["exclusion_reason"] == "personal"
+
+    def test_a_row_still_awaiting_review_is_left_flagged(self):
+        """The guard must not un-flag things she has not looked at."""
+        from taxlib import db
+        conn = db.init_db(":memory:")
+        self._row(conn, needs_review=True, review_note="is this business?")
+        self._row(conn, needs_review=True, review_note="is this business?")
+        assert conn.execute(
+            "SELECT needs_review FROM expenses").fetchone()["needs_review"] == 1
+
+    def test_the_banks_own_facts_are_still_refreshed(self):
+        """Protecting her decision must not freeze a corrected amount."""
+        from taxlib import db
+        conn = db.init_db(":memory:")
+        self._row(conn, needs_review=True, review_note="is this business?")
+        conn.execute("UPDATE expenses SET needs_review = 0, "
+                     "review_note = 'confirmed business by you'")
+        conn.commit()
+        db.upsert_expense(conn, source="wise", source_id="personal:CARD-1",
+                          date="2026-07-01", amount=53.98, currency="USD",
+                          amount_usd=53.98, category="meals",
+                          vendor="Uber Eats", description="food, corrected")
+        conn.commit()
+        row = conn.execute("SELECT amount, description, needs_review "
+                           "FROM expenses").fetchone()
+        assert row["amount"] == 53.98
+        assert row["description"] == "food, corrected"
+        assert row["needs_review"] == 0

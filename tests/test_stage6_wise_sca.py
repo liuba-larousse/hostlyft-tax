@@ -381,3 +381,32 @@ class TestARefundMustNotVanishIntoThePersonalAccount:
         assert wise_import._refund_of_claimed_spending(
             conn, description="Received money from CLOUD9 WINDY CIT",
             amount=4000.00, currency="USD") is None
+
+    def test_money_from_her_husband_is_not_a_merchant_refund(self):
+        """
+        Caught in a dry run before it ever wrote, and the reason dry runs
+        exist. Contractors are sometimes paid from the personal account, so
+        Olaide, Katerina and Yetunde appear as VENDORS on personal rows -
+        and the first version of this matched them. Money arriving from her
+        husband read as a refund, a EUR 3,689 transfer among them.
+
+        That is household money between spouses. Her rule is that it is
+        never read, and calling it a refund would both breach that and
+        quietly change a deduction. A refund comes from a MERCHANT.
+        """
+        from taxlib import wise_import
+        conn = self._db_with_personal_spending()
+        conn.execute(
+            "INSERT INTO expenses (source, source_id, date, tax_year, amount,"
+            " currency, amount_usd, category, vendor, description, business,"
+            " created_at, updated_at)"
+            " VALUES ('wise','personal:TRANSFER-9','2026-06-06',2026,70.00,"
+            "'USD',70.00,'contractor','Olaide Olaniyan','paid',"
+            "'hostlyft','x','x')")
+        conn.commit()
+        assert wise_import._refund_of_claimed_spending(
+            conn, description="Received money from Olaide Olaniyan",
+            amount=3689.00, currency="EUR") is None
+        assert wise_import._refund_of_claimed_spending(
+            conn, description="Received money from olaide olaniyan joseph",
+            amount=306.00, currency="EUR") is None
