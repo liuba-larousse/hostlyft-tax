@@ -280,7 +280,14 @@ def read_sheet(year, sheet_id=None, service=None):
     Fetched in one batch request rather than twelve, which is both faster
     and far less likely to hit Google's rate limit mid-year.
     """
-    sheet_id = sheet_id or config.get_secret("GOOGLE_SHEET_ID", required=True)
+    # HER ACCOUNTING SHEET, and only ever read. The named accessor says so;
+    # "GOOGLE_SHEET_ID" on its own reads like "the sheet" and is the one
+    # place writing is forbidden. See the block at the top of gsheets.py.
+    sheet_id = sheet_id or gsheets.accounting_sheet_id()
+    if not sheet_id:
+        raise gsheets.GoogleError(
+            "GOOGLE_SHEET_ID is not set in tax/.env - that is her accounting "
+            "sheet, which the monthly split figures are read from.")
     sheets = service or gsheets.service()
     names = [f"{month} {year}" for month in MONTHS]
 

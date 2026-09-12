@@ -634,7 +634,7 @@ def find_or_create(year):
     The id is remembered in tax/.env so the same sheet is updated every run
     rather than a new one appearing each time.
     """
-    existing = config.get_secret("GOOGLE_TAX_SHEET_ID")
+    existing = gsheets.tax_sheet_id()
     sheets = gsheets.service()
 
     if existing:
@@ -699,6 +699,9 @@ def write(sheet_id, tabs, force=False):
     should never be one, but the rule - never overwrite a formula without
     being asked - has to hold everywhere, not only where it was promised.
     """
+    # Before anything else: is this even the right spreadsheet? Her
+    # accounting sheet is read-only and this raises rather than touching it.
+    gsheets.assert_writable(sheet_id, what="the tax sheet build")
     sheets = gsheets.service()
 
     existing = {s["properties"]["title"]: s["properties"]["sheetId"]

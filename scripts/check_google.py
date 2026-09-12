@@ -53,26 +53,65 @@ def main():
     print(f"[{OK if ignored else BAD}] git "
           f"{'refuses to upload the token' if ignored else 'WOULD UPLOAD IT - stop'}")
 
-    # -- 3. can it open the accounting sheet --
-    print(f"\n{BOLD}3. CAN IT OPEN YOUR ACCOUNTING SHEET?{OFF}")
+    # -- 3. THE TWO SHEETS, SIDE BY SIDE --
+    #
+    # Both are shown together, every time, because the one failure this has
+    # actually produced was looking in the wrong one. On 2026-09-12 a review
+    # opened the accounting sheet hunting for the generated tabs, found her
+    # original 16, and reported Stage 11 as never done. It had been done -
+    # in the other sheet. Showing one sheet alone is what made that possible.
+    print(f"\n{BOLD}3. THE TWO SHEETS - WHICH IS WHICH{OFF}")
     print("-" * 70)
-    sheet_id = config.get_secret("GOOGLE_SHEET_ID")
-    if not sheet_id:
-        print(f"[{BAD}] GOOGLE_SHEET_ID is not set in tax/.env")
-        return 1
-    try:
-        sheets = gsheets.service()
-        info = sheets.spreadsheets().get(
-            spreadsheetId=sheet_id,
-            fields="properties(title),sheets(properties(title))").execute()
-    except Exception as error:
-        print(f"[{BAD}] {gsheets.describe_error(error, 'your accounting sheet')}")
-        return 1
+    sheets = gsheets.service()
 
-    titles = [s["properties"]["title"] for s in info.get("sheets", [])]
-    print(f"[{OK}] opened \"{info['properties']['title']}\"")
-    print(f"       {len(titles)} tabs: {', '.join(titles[:6])}"
-          f"{' ...' if len(titles) > 6 else ''}")
+    def describe(label, sheet_id, rule, key):
+        if not sheet_id:
+            print(f"[{BAD}] {label}: {key} is not set in tax/.env")
+            return None, []
+        try:
+            info = sheets.spreadsheets().get(
+                spreadsheetId=sheet_id,
+                fields="properties(title),sheets(properties(title))").execute()
+        except Exception as error:
+            print(f"[{BAD}] {label}: "
+                  f"{gsheets.describe_error(error, label)}")
+            return None, []
+        titles = [x["properties"]["title"] for x in info.get("sheets", [])]
+        print(f"[{OK}] {label}  \"{info['properties']['title']}\"")
+        print(f"       {key}")
+        print(f"       {rule}")
+        print(f"       {len(titles)} tabs: {', '.join(titles[:6])}"
+              f"{' ...' if len(titles) > 6 else ''}")
+        return info, titles
+
+    info, titles = describe(
+        "ACCOUNTING", gsheets.accounting_sheet_id(),
+        f"{YELLOW}READ ONLY - hers. Generated tabs are NOT here and never "
+        f"will be.{OFF}", "GOOGLE_SHEET_ID")
+    if info is None:
+        return 1
+    sheet_id = gsheets.accounting_sheet_id()
+
+    print()
+    tax_info, tax_titles = describe(
+        "TAX", gsheets.tax_sheet_id(),
+        f"WRITTEN TO - generated, rewritten every run. Look for Summary, "
+        f"Income, Expenses,\n       Distributions, Reconciliation HERE.",
+        "GOOGLE_TAX_SHEET_ID")
+    if tax_info is None:
+        print(f"       {YELLOW}Not built yet - run "
+              f"scripts/build_tax_sheet.py{OFF}")
+
+    # The guard that makes a wrong write impossible, exercised for real.
+    try:
+        gsheets.assert_writable(gsheets.accounting_sheet_id(),
+                                what="a write to the accounting sheet")
+        print(f"\n[{BAD}] THE GUARD IS NOT WORKING - a write to her "
+              f"accounting sheet was allowed")
+        return 1
+    except gsheets.WroteToTheWrongSheet:
+        print(f"\n[{OK}] the guard refuses any write aimed at her "
+              f"accounting sheet")
 
     # -- 4. can it read cell notes --
     print(f"\n{BOLD}4. CAN IT READ THE NOTES IN YOUR TABS?{OFF}")

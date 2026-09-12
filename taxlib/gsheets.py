@@ -168,6 +168,71 @@ def credentials():
     return creds
 
 
+# ===========================================================================
+#  WHICH SHEET IS WHICH - READ THIS BEFORE TOUCHING EITHER
+# ===========================================================================
+#
+# There are TWO Google Sheets and they are not interchangeable:
+#
+#   ACCOUNTING   "Hostlyft_Accounting_2026"   GOOGLE_SHEET_ID
+#                HERS. Hand-maintained, full of her own formulas and the
+#                monthly split calculations everything else is derived from.
+#                THIS TOOL ONLY EVER READS IT. Never written to, ever.
+#
+#   TAX          "Hostlyft_Tax_2026"          GOOGLE_TAX_SHEET_ID
+#                OURS. Generated, rewritten on every run, safe to clobber.
+#                Every write goes here.
+#
+# WHY THIS BLOCK EXISTS
+#     On 2026-09-12 a review opened GOOGLE_SHEET_ID looking for the
+#     generated tabs, found only her original 16, and reported that Stage 11
+#     had never been done. It had - the tabs were in the other sheet all
+#     along. She caught it. Nothing was damaged, because the write path
+#     never pointed at her sheet; the mistake was in the READING.
+#
+#     The names invite it: "GOOGLE_SHEET_ID" reads like "the sheet", when it
+#     is the one place writing is forbidden. Renaming the key would mean
+#     editing her .env by hand, so instead both are reached through the two
+#     named functions below, and writing is guarded at the door.
+
+def accounting_sheet_id():
+    """Her own accounting sheet. READ ONLY - never write to this."""
+    return config.get_secret("GOOGLE_SHEET_ID")
+
+
+def tax_sheet_id():
+    """The generated tax sheet. This is the one that gets written."""
+    return config.get_secret("GOOGLE_TAX_SHEET_ID")
+
+
+class WroteToTheWrongSheet(GoogleError):
+    """Raised rather than writing a single cell into her accounting sheet."""
+
+
+def assert_writable(sheet_id, what="this write"):
+    """
+    Refuse to write to her accounting sheet.
+
+    The last line of defence, deliberately placed at the point of writing
+    rather than at the point of deciding - so it holds no matter which path
+    got here, including one written later by someone who never read the
+    block above.
+    """
+    accounting = accounting_sheet_id()
+    if accounting and str(sheet_id) == str(accounting):
+        raise WroteToTheWrongSheet(
+            f"{what} was aimed at Hostlyft_Accounting_2026 (GOOGLE_SHEET_ID), "
+            f"which is her own hand-maintained sheet and is READ ONLY. "
+            f"Generated tabs belong in Hostlyft_Tax_2026 "
+            f"(GOOGLE_TAX_SHEET_ID). Nothing was written.")
+    if not sheet_id:
+        raise WroteToTheWrongSheet(
+            f"{what} has no target sheet. GOOGLE_TAX_SHEET_ID is not set - "
+            f"run scripts/build_tax_sheet.py, which creates the tax sheet "
+            f"and records its id.")
+    return sheet_id
+
+
 def service(name="sheets", version="v4"):
     from googleapiclient.discovery import build
     return build(name, version, credentials=credentials(),
