@@ -52,6 +52,8 @@ SCHEDULE_C = {
     "professional services": "17 - Legal and professional",
     "advertising": "8 - Advertising",
     "travel": "24a - Travel",
+    "meals": "24b - Deductible meals",
+    "entertainment": "24b - Deductible meals (NOT deductible - enter 0)",
     "taxes and licences": "23 - Taxes and licenses",
     "refunds to clients": "2 - Returns and allowances",
     # Cashback is a rebate on spending, so it nets against the costs it came
@@ -429,6 +431,173 @@ def distributions_tab(connection, year):
                       "scripts/quarterly_distribution.py")
 
 
+def form_lines_tab(connection, year, result):
+    """
+    Every figure the calculator produced, against the line it belongs on.
+
+    WHY THIS RATHER THAN PRE-FILLED PDFs, WHICH SHE ASKED FOR FIRST
+        Three things block that, and the third is the one that settles it.
+
+        1. Drive is out of reach. The Google token carries the spreadsheets
+           scope only - a Drive write returns 403. Fixable, but it would
+           mean granting this tool access to her whole Drive, where today it
+           can touch exactly two spreadsheets.
+
+        2. The identity half of a return is not ours to invent: SSN or
+           ITIN, address, and on Married Filing Separately her husband's
+           name and SSN too.
+
+        3. THE 2026 FORMS DO NOT EXIST YET. Only Form 1040-ES is published
+           for 2026; f1040.pdf, Schedule C, Schedule SE, 2555 and 8829 are
+           all still the 2025 editions and will be until around January.
+           Filling a 2025 form with 2026 figures produces a document that
+           is wrong on its face - and looks official while being so.
+
+        So the figures are mapped to their lines instead. It works today,
+        for every form, needs no new permission over her Drive, and cannot
+        be mistaken for a return.
+
+    Line numbers are read off the current Schedule C. They move between
+    years occasionally, so each row carries its label as well as its number
+    - the label is what to match on if a number has shifted.
+    """
+    from taxlib import filings
+
+    from taxlib import tax as _tax
+
+    totals = result["totals"]
+
+    # A RETURN REPORTS WHAT HAPPENED, NOT WHAT IS PLANNED.
+    #
+    # The headline estimate assumes the contractor jars are emptied before
+    # 31 December, which is right for working out quarterly payments. It is
+    # NOT right here: these are the numbers that go on a filed form, and on
+    # the day she files, the jars either went out or they did not. So every
+    # figure below is recomputed on the actual position.
+    actual_profit = result.get("net_profit_if_jars_stay")
+    actual = _tax.estimate(actual_profit)
+
+    tab = Tab(money_columns=[3])
+    tab.title(f"How to fill each form - {year}")
+    tab.note("Every figure below comes from the calculator. Lines marked "
+             "YOU are ones only you can fill - identity, dates, anything "
+             "the bank never saw.")
+    tab.note("NOT A RETURN AND NOT ADVICE. It says which number goes where. "
+             "Check each figure against the form's own instructions before "
+             "you file - the linked instructions are the authority, not "
+             "this tab.")
+    tab.note("Line NUMBERS shift between years; the line LABEL does not. If "
+             "a number does not match your form, match the label.")
+    tab.note("THESE ARE THE ACTUAL FIGURES, not the quarterly estimate. The "
+             "estimate assumes the contractor jars are emptied before 31 "
+             "December; a filed return reports what really happened. If the "
+             "jars do go out, come back and rebuild this before filing.")
+    tab.blank()
+
+    tab.head("Form", "Line", "What it is called on the form", "Amount",
+             "Where it comes from")
+
+    # ---- Schedule C ---------------------------------------------------
+    tab.row("Schedule C", "1", "Gross receipts or sales",
+            money(totals["income_usd"]),
+            "every payment received, at GROSS - before platform fees")
+    # THE DEDUCTIBLE AMOUNT, NOT THE GROSS. Meals go on line 24b at 50% and
+    # entertainment at zero, so listing what she spent would not add up to
+    # line 28 and would overstate the deduction on the face of the form.
+    for row in sorted(
+            connection.execute(
+                "SELECT category, SUM(amount_usd) AS usd FROM expenses "
+                "WHERE excluded = 0 AND tax_year = ? GROUP BY category",
+                (year,)).fetchall(),
+            key=lambda r: -(r["usd"] or 0)):
+        line = SCHEDULE_C.get(row["category"], "review - no line assigned")
+        number, _, label = line.partition(" - ")
+        share = config.deductible_share(row["category"])
+        deductible = round((row["usd"] or 0) * share, 2)
+        source = f"everything categorised '{row['category']}'"
+        if row["category"] == "refunds to clients":
+            # Line 2 reduces gross receipts rather than being an expense.
+            # The database carries it as a negative-effect cost, which nets
+            # to the same profit - but entering it BOTH on line 2 and
+            # inside line 28 would deduct it twice.
+            source = ("money given back to clients. Put it on line 2 OR "
+                      "leave it inside line 28 - not both.")
+        elif share != 1.0:
+            source = (f"${row['usd']:,.2f} spent, at {share:.0%} - "
+                      f"the form wants the deductible figure")
+        tab.row("Schedule C", number, label or line, money(deductible),
+                source)
+    tab.row("Schedule C", "28", "Total expenses",
+            money(totals["deductible_expenses_usd"]),
+            "the sum above - meals already halved, entertainment at zero")
+    tab.row("Schedule C", "29", "Tentative profit",
+            money(totals["income_usd"] - totals["deductible_expenses_usd"]),
+            "line 1 minus line 28")
+    office = result.get("home_office_usd") or 0
+    tab.row("Schedule C", "30", "Expenses for business use of your home",
+            money(office), "from Form 8829 - the actual-cost method wins")
+    tab.row("Schedule C", "31", "NET PROFIT",
+            money(result.get("net_profit_if_jars_stay")),
+            "line 29 minus line 30. Schedule SE starts here.")
+    tab.blank()
+
+    # ---- Schedule SE --------------------------------------------------
+    net = result.get("net_profit_if_jars_stay") or 0
+    tab.row("Schedule SE", "2", "Net profit from Schedule C", money(net),
+            "Schedule C line 31")
+    tab.row("Schedule SE", "4a", "Multiply line 2 by 92.35%",
+            money(round(net * 0.9235, 2)), "IRC 1402(a)(12)")
+    se_total = (actual.get("self_employment_tax") or {}).get("total", 0.0)
+    tab.row("Schedule SE", "12", "Self-employment tax", money(se_total),
+            "15.3% - and the FEIE does NOT reduce it")
+    tab.row("Schedule SE", "13", "Deductible half of it",
+            money(round(se_total / 2, 2)),
+            "carries to Schedule 1, reducing income tax only")
+    tab.blank()
+
+    # ---- Form 2555 and 1040 -------------------------------------------
+    tab.row("Form 2555", "-", "Foreign earned income excluded",
+            money(min(net, 132900)),
+            "capped at $132,900 for 2026. File it to claim it.")
+    tab.row("Form 2555", "YOU", "Bona fide residence dates, foreign address",
+            "", "France, full year - only you can state the dates")
+    tab.row("Form 1040", "YOU", "Name, SSN/ITIN, address", "",
+            "and on MFS, your husband's name and SSN too")
+    tab.row("Form 1040", "-", "Total tax", money(actual.get("total")),
+            "essentially all self-employment tax; income tax is $0")
+    tab.blank()
+
+    # ---- Form 8829 ----------------------------------------------------
+    home = result.get("home_office") or {}
+    if home:
+        tab.row("Form 8829", "1", "Area used regularly and exclusively",
+                f"{config.HOME_OFFICE['office_area']} m2",
+                "the exclusive-use test is the one people fail")
+        tab.row("Form 8829", "2", "Total area of home",
+                f"{config.HOME_OFFICE['total_area']} m2", "")
+        pct = (home.get("actual") or {}).get("business_pct")
+        tab.row("Form 8829", "7", "Business percentage",
+                f"{pct:.1%}" if pct else "", "line 1 divided by line 2")
+        tab.row("Form 8829", "-", "Depreciation", "not applicable",
+                "you rent - renters take none, which skips the hard part")
+        tab.row("Form 8829", "36", "Allowable deduction", money(office),
+                "carries to Schedule C line 30")
+        tab.blank()
+
+    # ---- 1040-ES, the one with a deadline ------------------------------
+    tab.row("Form 1040-ES", "-", "Estimated tax for each quarter",
+            money(round((result.get("total") or 0) / 4, 2)),
+            "THE 2026 FORM IS PUBLISHED - the only one that is")
+    for quarter in filings.quarters(year):
+        tab.row("Form 1040-ES", f"Q{quarter['quarter']} voucher",
+                f"due {quarter['due']}",
+                money(round((result.get("total") or 0) / 4, 2)),
+                quarter["period"])
+    tab.row("Form 1040-ES", "YOU", "Name, SSN, address on the voucher", "",
+            "or pay online at irs.gov/payments and skip the voucher")
+    return tab
+
+
 def tax_calendar_tab(connection, year, result, today=None):
     """
     What you owe, whether it has gone out, and every form with its date.
@@ -505,10 +674,12 @@ def tax_calendar_tab(connection, year, result, today=None):
         f"Form 4868 pushes filing to {deadline['with_4868']:%d %B %Y}.")
     quarters_tab.blank()
     quarters_tab.head("Form", "What it is", "Due", "Filed with", "Link",
-                      "Worth knowing")
+                      "How to fill it", "Worth knowing")
     for form in filings.FORMS:
         quarters_tab.row(form["form"], form["what"], form["due"],
-                         form["who"], form["url"], form["note"])
+                         form["who"], form["url"],
+                         form.get("how", "see the 'Filling the forms' tab"),
+                         form["note"])
     return quarters_tab
 
 
@@ -526,8 +697,9 @@ def build_all(connection, year, built_on):
     tabs = {"Summary": summary_tab(data, year, built_on)}
     tabs.update(month_tabs(connection, data, year))
 
-    tabs["Tax Calendar"] = tax_calendar_tab(
-        connection, year, tax.from_database(connection, year))
+    _tax = tax.from_database(connection, year)
+    tabs["Tax Calendar"] = tax_calendar_tab(connection, year, _tax)
+    tabs["Filling the forms"] = form_lines_tab(connection, year, _tax)
     tabs["Distributions"] = distributions_tab(connection, year)
 
     tabs["Income"] = simple_tab(
@@ -977,7 +1149,7 @@ def freeze_for(tab):
 # Tax Calendar sits here at her request: it carries the deadlines and what
 # is owed, so it is the tab to see on opening rather than one to scroll
 # twelve months past.
-FRONT_TABS = ["Summary", "Tax Calendar"]
+FRONT_TABS = ["Summary", "Tax Calendar", "Filling the forms"]
 
 
 def tab_order(tabs):

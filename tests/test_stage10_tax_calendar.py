@@ -159,3 +159,66 @@ class TestTheFormsList:
     def test_w8ben_has_no_threshold(self):
         w8 = next(f for f in filings.FORMS if "W-8BEN" in f["form"])
         assert "first dollar" in w8["due"]
+
+
+class TestTheFormWorksheet:
+    """
+    She asked for pre-filled PDFs in a Drive folder. Three things blocked
+    it, and the third settles it: THE 2026 FORMS DO NOT EXIST YET. Only
+    Form 1040-ES is published; 1040, Schedule C, SE, 2555 and 8829 are all
+    still the 2025 editions. A 2025 form carrying 2026 figures is wrong on
+    its face while looking official.
+
+    So the figures are mapped to their lines instead.
+    """
+
+    @staticmethod
+    def _tab():
+        from taxlib import db, tax, tax_sheet
+        conn = db.init_db()
+        return tax_sheet.form_lines_tab(conn, 2026,
+                                        tax.from_database(conn, 2026))
+
+    def test_meals_have_a_schedule_c_line(self):
+        """
+        They had none, so every meal landed as "review - no line assigned"
+        on the one tab meant to say exactly where numbers go.
+        """
+        from taxlib import tax_sheet
+        assert tax_sheet.SCHEDULE_C["meals"].startswith("24b")
+
+    def test_entertainment_is_marked_as_zero_not_just_categorised(self):
+        from taxlib import tax_sheet
+        assert "0" in tax_sheet.SCHEDULE_C["entertainment"]
+
+    def test_the_worksheet_uses_actual_figures_not_the_jar_projection(self):
+        """
+        The quarterly estimate assumes the jars are emptied before 31
+        December. A FILED RETURN reports what actually happened - on the
+        day she files, the jars either went out or they did not. Mixing the
+        two put a projected SE tax beside an actual net profit.
+        """
+        from taxlib import db, tax
+        conn = db.init_db()
+        result = tax.from_database(conn, 2026)
+        rows = self._tab().rows
+        profit = [r for r in rows if len(r) > 3 and r[1] == "31"][0][3]
+        se = [r for r in rows if len(r) > 3 and r[0] == "Schedule SE"
+              and r[1] == "12"][0][3]
+        assert profit == result["net_profit_if_jars_stay"]
+        assert abs(se - result["tax_if_jars_stay"]) < 1.0
+
+    def test_deductible_amounts_are_shown_not_gross_spend(self):
+        """
+        Line 24b wants the halved figure. Printing what she spent would
+        overstate the deduction on the face of the form and stop the lines
+        adding up to line 28.
+        """
+        rows = self._tab().rows
+        meals = [r for r in rows if len(r) > 3 and r[1] == "24b"]
+        if meals:
+            assert "at 50%" in str(meals[0][4])
+
+    def test_lines_that_only_she_can_fill_are_marked(self):
+        rows = self._tab().rows
+        assert any(len(r) > 1 and r[1] == "YOU" for r in rows)
