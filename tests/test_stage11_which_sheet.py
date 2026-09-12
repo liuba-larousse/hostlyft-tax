@@ -91,3 +91,37 @@ class TestTheTwoSheetsAreReachedByName:
         for module in (reconcile, tax_sheet):
             source = inspect.getsource(module)
             assert 'get_secret("GOOGLE_SHEET_ID"' not in source, module.__name__
+
+
+class TestTabOrder:
+    """
+    Tax Calendar sits second, right after Summary - her request. It carries
+    the deadlines and what is owed, so it should be there on opening rather
+    than twelve months of scrolling away.
+    """
+
+    TABS = ["Summary", "Jan 2026", "Feb 2026", "Sep 2026", "Tax Calendar",
+            "Distributions", "Income", "Expenses", "Reconciliation"]
+
+    def test_tax_calendar_comes_straight_after_summary(self):
+        from taxlib import tax_sheet
+        order = tax_sheet.tab_order(dict.fromkeys(self.TABS))
+        assert order[:2] == ["Summary", "Tax Calendar"]
+
+    def test_the_months_still_follow_in_order(self):
+        from taxlib import tax_sheet
+        order = tax_sheet.tab_order(dict.fromkeys(self.TABS))
+        assert order[2:5] == ["Jan 2026", "Feb 2026", "Sep 2026"]
+
+    def test_a_missing_front_tab_does_not_leave_a_hole(self):
+        """An older sheet has no Tax Calendar yet."""
+        from taxlib import tax_sheet
+        without = [t for t in self.TABS if t != "Tax Calendar"]
+        order = tax_sheet.tab_order(dict.fromkeys(without))
+        assert order[0] == "Summary"
+        assert order[1] == "Jan 2026"
+
+    def test_every_tab_appears_exactly_once(self):
+        from taxlib import tax_sheet
+        order = tax_sheet.tab_order(dict.fromkeys(self.TABS))
+        assert sorted(order) == sorted(self.TABS)

@@ -973,10 +973,18 @@ def freeze_for(tab):
     return 1
 
 
+# Tabs that belong at the front, in this order, before the monthly ones.
+# Tax Calendar sits here at her request: it carries the deadlines and what
+# is owed, so it is the tab to see on opening rather than one to scroll
+# twelve months past.
+FRONT_TABS = ["Summary", "Tax Calendar"]
+
+
 def tab_order(tabs):
-    """Summary first, then months in order, then the detail tabs."""
-    months = [n for n in tabs if n[:3] in
+    """The front tabs, then the months in order, then the detail tabs."""
+    front = [n for n in FRONT_TABS if n in tabs]
+    months = [n for n in tabs if n not in front and n[:3] in
               [m[:3] for m in MONTH_NAMES]]
     months.sort(key=lambda n: [m[:3] for m in MONTH_NAMES].index(n[:3]))
-    rest = [n for n in tabs if n not in months and n != "Summary"]
-    return ["Summary"] + months + rest
+    rest = [n for n in tabs if n not in front and n not in months]
+    return front + months + rest
