@@ -92,7 +92,7 @@ from taxlib import config
 #      + wise_jars, contractor_ledger
 #   3  + jar_movements: money moved INTO and OUT OF each jar
 #   4  + contractor_forms: whether each person's W-9 or W-8BEN is on file
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 # ===========================================================================
@@ -546,6 +546,40 @@ CREATE INDEX IF NOT EXISTS idx_distributions_quarter
     ON distributions (tax_year, quarter);
 
 
+-- ------------------------------------------------------ estimated tax paid
+-- What has actually been sent to the IRS, per quarter.
+--
+-- NOT AN EXPENSE. Federal income tax and self-employment tax are personal
+-- liabilities of hers, not costs of the business, and a single-member LLC
+-- is disregarded so it makes no difference which account pays. Given a row
+-- in `expenses` this would wrongly reduce her profit.
+--
+-- `detected` says where the knowledge came from: a payment found in her
+-- Wise account, or one she recorded by hand. NOTHING FOUND IS NOT THE SAME
+-- AS NOTHING PAID - she may pay by card, by EFTPS, or from an account this
+-- tool cannot see, so an absent row means "not seen", never "not paid".
+CREATE TABLE IF NOT EXISTS tax_payments (
+    id                INTEGER PRIMARY KEY,
+
+    tax_year          INTEGER NOT NULL,
+    quarter           INTEGER NOT NULL,      -- 1-4, IRS estimated quarters
+
+    paid_on           TEXT    NOT NULL,      -- YYYY-MM-DD
+    amount            REAL    NOT NULL,
+    currency          TEXT    NOT NULL,
+    amount_usd        REAL,
+
+    detected          TEXT    NOT NULL,      -- 'wise' | 'manual'
+    source_id         TEXT,                  -- the Wise reference, if any
+    note              TEXT,
+
+    created_at        TEXT    NOT NULL,
+    updated_at        TEXT    NOT NULL,
+
+    UNIQUE (tax_year, quarter, source_id)
+);
+
+
 -- ------------------------------------------------------------------- meta
 -- Internal bookkeeping: which version of the layout above this file uses.
 CREATE TABLE IF NOT EXISTS meta (
@@ -675,6 +709,18 @@ def _migrate_5_to_6(connection):
         if added else []
 
 
+def _migrate_6_to_7(connection):
+    """
+    Version 6 -> 7.
+
+    Adds tax_payments. A new table, already built by the CREATE TABLE above.
+
+    Empty means nothing has been SEEN, which is not the same as nothing
+    having been paid - and the tab that reads it says so in those words.
+    """
+    return ["added tax_payments (estimated tax actually sent to the IRS)"]
+
+
 # version to reach -> the function that gets there
 MIGRATIONS = {
     2: _migrate_1_to_2,
@@ -682,6 +728,7 @@ MIGRATIONS = {
     4: _migrate_3_to_4,
     5: _migrate_4_to_5,
     6: _migrate_5_to_6,
+    7: _migrate_6_to_7,
 }
 
 
@@ -973,6 +1020,28 @@ def distributions_for(connection, tax_year, quarter=None):
     return connection.execute(
         "SELECT * FROM distributions WHERE tax_year = ? AND quarter = ? "
         "ORDER BY person", (tax_year, quarter)).fetchall()
+
+
+def record_tax_payment(connection, *, tax_year, quarter, paid_on, amount,
+                       currency, amount_usd=None, detected="manual",
+                       source_id=None, note=None):
+    """Record a payment of estimated tax. Re-recording the same one revises it."""
+    _upsert(
+        connection, "tax_payments",
+        {"tax_year": tax_year, "quarter": quarter,
+         "source_id": source_id or f"manual:{tax_year}:{quarter}"},
+        {"paid_on": paid_on, "amount": amount, "currency": currency,
+         "amount_usd": amount_usd, "detected": detected, "note": note},
+        protect_conversion=True,
+    )
+    return connection
+
+
+def tax_payments_for(connection, tax_year):
+    """Everything paid toward a year's estimated tax, by quarter."""
+    return connection.execute(
+        "SELECT * FROM tax_payments WHERE tax_year = ? "
+        "ORDER BY quarter, paid_on", (tax_year,)).fetchall()
 
 
 def upsert_payout(connection, *, payout_id, arrival_date, amount, currency,

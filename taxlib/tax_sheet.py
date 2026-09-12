@@ -34,7 +34,7 @@ WHY EVERY ROW CARRIES ITS SOURCE ID
 
 import datetime as dt
 
-from taxlib import config, db, gsheets, reconcile
+from taxlib import config, db, gsheets, reconcile, tax
 from taxlib.sheet_style import Tab, format_requests
 
 
@@ -420,6 +420,89 @@ def distributions_tab(connection, year):
                       "scripts/quarterly_distribution.py")
 
 
+def tax_calendar_tab(connection, year, result, today=None):
+    """
+    What you owe, whether it has gone out, and every form with its date.
+
+    TWO THINGS THIS TAB MUST NOT DO.
+
+    It must not say "UNPAID". This tool can only see her Wise accounts. She
+    may pay by card, through EFTPS, or from an account it cannot read, so
+    an absent payment means NOT SEEN, never NOT PAID. Stating the stronger
+    thing would be a false alarm every quarter she pays another way.
+
+    And it must not put the tax in `expenses`. Federal income tax and
+    self-employment tax are her personal liabilities, not costs of the
+    business - a disregarded entity makes it irrelevant which account pays.
+    """
+    import datetime as _d
+    from taxlib import filings
+
+    today = today or _d.date.today()
+    per_quarter = round((result.get("total") or 0.0) / 4, 2)
+
+    paid = {}
+    for row in db.tax_payments_for(connection, year):
+        paid.setdefault(row["quarter"], []).append(row)
+
+    rows = []
+    for quarter in filings.quarters(year, today):
+        number = quarter["quarter"]
+        seen = paid.get(number, [])
+        amount = sum(r["amount_usd"] or r["amount"] or 0 for r in seen)
+        if seen:
+            status = f"paid {seen[0]['paid_on']}"
+            how = ("found in Wise" if seen[0]["detected"] == "wise"
+                   else "you recorded it")
+        elif quarter["overdue"]:
+            status = f"NOT SEEN - was due {quarter['due']}"
+            how = "check it yourself - see the note below"
+        else:
+            status = f"due in {quarter['days_away']} days"
+            how = ""
+        rows.append([
+            f"Q{number}", quarter["period"], str(quarter["due"]),
+            money(per_quarter), money(amount) if seen else "",
+            status, how,
+        ])
+
+    quarters_tab = simple_tab(
+        f"Estimated tax - {year}",
+        [f"Your total estimate for {year} is "
+         f"${result.get('total') or 0:,.2f}, so ${per_quarter:,.2f} a "
+         f"quarter. Self-employment tax is effectively all of it.",
+         "IRS QUARTERS ARE NOT THREE MONTHS EACH. Q2 is two months and Q4 "
+         "is four. The periods below are the IRS's own.",
+         "\"NOT SEEN\" DOES NOT MEAN UNPAID. This checks your personal "
+         "Wise account. If you paid by card, through EFTPS, or from an "
+         "account this tool cannot read, it will not appear here - record "
+         "it with: python scripts/tax_calendar.py --paid Q3 --amount 861.59",
+         "Paying 100% of last year's total tax is the SAFE HARBOUR: it "
+         "protects you from underpayment penalties however this year ends."],
+        ["Quarter", "Period", "Due", "You owe", "Seen paid", "Status",
+         "How we know"],
+        rows, money_columns=[3, 4])
+
+    quarters_tab.blank()
+    quarters_tab.title(f"Forms to file for {year}")
+    deadline = filings.filing_deadline(year)
+    quarters_tab.note(
+        f"THE RETURN IS DUE {deadline['abroad']:%d %B %Y}, not "
+        f"{deadline['normal']:%d %B %Y}. Living abroad gives you an "
+        f"automatic two-month extension - nothing to request.")
+    quarters_tab.note(
+        f"BUT IT EXTENDS THE FILING, NOT THE PAYING. Interest runs from "
+        f"{deadline['interest_from']:%d %B %Y} on anything still owed. "
+        f"Form 4868 pushes filing to {deadline['with_4868']:%d %B %Y}.")
+    quarters_tab.blank()
+    quarters_tab.head("Form", "What it is", "Due", "Filed with", "Link",
+                      "Worth knowing")
+    for form in filings.FORMS:
+        quarters_tab.row(form["form"], form["what"], form["due"],
+                         form["who"], form["url"], form["note"])
+    return quarters_tab
+
+
 def build_all(connection, year, built_on):
     data = collect(connection, year)
 
@@ -434,6 +517,8 @@ def build_all(connection, year, built_on):
     tabs = {"Summary": summary_tab(data, year, built_on)}
     tabs.update(month_tabs(connection, data, year))
 
+    tabs["Tax Calendar"] = tax_calendar_tab(
+        connection, year, tax.from_database(connection, year))
     tabs["Distributions"] = distributions_tab(connection, year)
 
     tabs["Income"] = simple_tab(

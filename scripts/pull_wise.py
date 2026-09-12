@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from taxlib import config, db, wise_import   # noqa: E402
+from taxlib import config, db, filings, wise_import   # noqa: E402
 
 BOLD, GREEN, YELLOW, RED, OFF = (
     "\033[1m", "\033[32m", "\033[33m", "\033[31m", "\033[0m")
@@ -122,10 +122,27 @@ def main():
                 personal=personal, balance_kind=kind, jar_name=jar)
             for key in ("income", "expenses", "notes"):
                 totals[key].extend(records[key])
+            totals.setdefault("tax_payments", []).extend(
+                records.get("tax_payments", []))
             totals.setdefault("movements", []).extend(records["jars"])
 
             label_jar = f" ({jar})" if jar else ""
             print(f"   {currency} {kind}{label_jar:<18} {len(txns):>3} txns")
+
+    # Estimated tax paid to the IRS. Recorded, never as an expense - it is
+    # her personal liability, not a cost of the business.
+    for payment in totals.get("tax_payments", []):
+        year, quarter = filings.quarter_for_payment(payment["paid_on"])
+        db.record_tax_payment(
+            connection, tax_year=year, quarter=quarter,
+            paid_on=payment["paid_on"], amount=payment["amount"],
+            currency=payment["currency"], amount_usd=payment["amount_usd"],
+            detected="wise", source_id=payment["source_id"],
+            note=payment["note"])
+    if totals.get("tax_payments"):
+        connection.commit()
+        print(f"   {GREEN}{len(totals['tax_payments'])} estimated tax "
+              f"payment(s) found{OFF}")
 
     # ---- report ----
     counted = [r for r in totals["income"] if not r.get("excluded")]

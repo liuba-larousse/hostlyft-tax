@@ -154,6 +154,31 @@ PERSONAL_NEEDS_CONFIRMING = {
 }
 
 
+# WHO THE IRS LOOKS LIKE ON A BANK STATEMENT.
+#
+# A THIRD NARROW EXTENSION TO THE PERSONAL ACCOUNT, at her request on
+# 2026-09-12: she wants to see whether the quarterly estimate has actually
+# been paid, and she pays it from the personal account.
+#
+# Only payments to the US tax authorities are kept. Everything else in that
+# account is still discarded unread, exactly as before.
+#
+# "IRS" is matched as a WHOLE WORD. As a substring it hits "Airside", which
+# is what a Costa Coffee at an airport is called - found on the first run of
+# this search. The same trap as "Uber" matching "Uber Eats".
+TAX_AUTHORITY_PATTERNS = (
+    r"\birs\b", r"internal revenue", r"united states treasury",
+    r"\bus treasury\b", r"usataxpymt", r"eftps", r"\birs\s*usa\b",
+)
+
+
+def looks_like_tax_payment(description):
+    """Is this outgoing money a payment of US tax?"""
+    import re
+    text = (description or "").lower()
+    return any(re.search(pattern, text) for pattern in TAX_AUTHORITY_PATTERNS)
+
+
 def _business_subscription(description):
     """(category, matched word) if this is a recognised business vendor."""
     from taxlib import categorize
@@ -653,6 +678,7 @@ def build_records(connection, transactions, *, profile_label, business,
     of them with a currency code.
     """
     income, expenses, jars, notes = [], [], [], []
+    tax_payments = []
     skipped_personal = 0
 
     for txn in transactions:
@@ -793,6 +819,20 @@ def build_records(connection, transactions, *, profile_label, business,
             continue
 
         # ---- outgoing ----
+        if personal and looks_like_tax_payment(description):
+            # Recorded, but NEVER as an expense. Federal income tax and
+            # self-employment tax are her personal liabilities, not costs of
+            # the business - and a disregarded entity makes it irrelevant
+            # which account pays. An expense row here would reduce the very
+            # profit the tax is computed on.
+            tax_payments.append({
+                "paid_on": date, "amount": abs(amount), "currency": currency,
+                "amount_usd": abs(amount) if currency == "USD" else None,
+                "source_id": source_id, "detected": "wise",
+                "note": description[:200],
+            })
+            continue
+
         if personal:
             # NARROW EXTENSION, authorised explicitly: contractors are
             # sometimes paid from the personal account, and those are real
@@ -986,4 +1026,4 @@ def build_records(connection, transactions, *, profile_label, business,
         movement["person"] = person["name"] if person else None
 
     return {"income": income, "expenses": expenses, "jars": jars,
-            "notes": notes}
+            "notes": notes, "tax_payments": tax_payments}
