@@ -639,6 +639,113 @@ rule that protects her from penalties if she paid 100% of last year's tax.
 At 12 September: tax **$3,446.36** if the jars go out, **$4,356.43** if they
 do not. **$910.07** turns on it.
 
+---
+
+## WHERE WE ARE — 13 September 2026
+
+**Read this first when resuming.** Everything below is committed and pushed;
+the working tree is clean and 473 tests pass. Database schema is version 7.
+
+### The three things with a clock on them
+
+| # | What | When | Amount |
+|---|---|---|---|
+| 1 | **2026 Q3 estimated tax** | **15 Sep 2026 — 2 days** | **$2,538.38** |
+| 2 | **2025 return — NOT FILED, overdue** | was due 15 Jun 2026 | ~$607 tax + ~$100 penalties |
+| 3 | **2024 return — NOT FILED, status unknown** | was due 15 Jun 2025 | unknown |
+| 4 | Contractor jars must be WITHDRAWN | before 31 Dec 2026 | $6,440.88 |
+| 5 | Katerina's W-9 → 1099-NEC | 31 Jan 2027 | 24% withholding without it |
+
+**On 2024:** the database holds nothing before 17 September 2025, so the
+business did not exist. But **Married Filing Separately has a $5 gross-income
+filing threshold** — effectively, any income at all triggers a return. Whether
+she had other income in 2024 is NOT known and must be asked, not assumed.
+
+**Why filing 2025 matters for 2026:** once a 2025 return exists showing ~$607
+of tax, the prior-year safe harbour lets her pay **100% of last year's tax**
+across 2026 — about **$607 instead of $2,894** — with no underpayment penalty.
+The full 2026 tax is still owed at filing; this is timing, not a saving.
+
+### Current position
+
+```
+2026   income $57,715.21   profit $20,485.54   tax $2,894.51
+2025   income  $5,256.91   profit  $4,292.80   tax   $606.56
+outstanding 2026 estimates                     $2,538.38
+Q4 (running since 1 Sep) accrued so far          $356.13
+```
+
+Nothing has been seen paid toward any 2026 quarter. "NOT SEEN" is not
+"unpaid" — this reads her personal Wise account only.
+
+### What was built after Stage 12b
+
+- **Stage 14**, quarterly distribution — `scripts/quarterly_distribution.py`,
+  schema table `distributions`. Split is **20% even between the four, 80% by
+  DOLLARS EARNED** (not revenue driven). Her weight is the 5% off the top,
+  which lands her near 7% of the pool, not 5% — written down and tested so
+  nobody "fixes" it.
+- **Jar projection** — tax assumes contractor jars are paid before 31 Dec.
+  `assume_contractor_jars_paid_by_year_end`, default True. **Settled; do not
+  re-ask.**
+- **Period-correct quarters** — `tax.from_database(..., through=...)`. Each
+  quarter uses its own cut-off (Q3 ends 31 AUGUST). Home office pro-rates and
+  is never asked about the future.
+- **Tax Calendar tab** — what is owed, what has been seen paid, every form
+  with dates and IRS links. **Filling the forms tab** — every figure against
+  its line number.
+- **`scripts/fill_1040es.py`** — fills all four 2026 vouchers, matched to the
+  DUE DATE printed on each. Only the 2026 1040-ES exists; every other form is
+  still the 2025 edition until about January.
+- **Earned cross-check** — Reconciliation shows "Earned (accounting sheet)"
+  beside "Earned (our check)". They agree to 0.6%.
+- **Equipment** — work laptop, 2026-07-16, $3,905.65, 100% business. Over the
+  $2,500 de minimis threshold so it needs **Section 179 on Form 4562**.
+- **Refund capture, jar-sourced payouts, entertainment at 0%,
+  `scripts/meals.py`**, and the IRS figures verified against irs.gov.
+
+### Still open, no deadline
+
+- **51 income rows flagged** — unmatched HubSpot payouts and unrecognised
+  senders. Includes one at $5,924.45. The biggest untouched backlog.
+- **`contractor_forms` is empty** — no W-9 or W-8BEN recorded for anyone.
+- **18 meals have no business purpose recorded.** `scripts/meals.py` exists.
+- **$12,169.53 of 2026 client income has no split rule** in the accounting
+  sheet — Timur and Tyler mostly. Fine if they are hers alone.
+- **Stage 13 scheduling** — deliberately not started, and for her main Mac.
+
+### Hard-won facts, so they are not rediscovered
+
+- **Two sheets.** `GOOGLE_SHEET_ID` is her ACCOUNTING sheet and is READ ONLY;
+  `GOOGLE_TAX_SHEET_ID` is the generated tax sheet. A write to the former now
+  raises. `check_google.py` prints both side by side.
+- **One tax calculation**, in `taxlib/tax.py`. Tabs that computed their own
+  disagreed with it — the Summary printed $3,667.23 against $3,446.36.
+- **Whitespace breaks matching.** "Uber   * Eats", "A-IRS-ide", "Payment\nVoucher"
+  — three separate bugs from the same cause. Normalise before matching.
+- **US tax quarters are not calendar quarters**: Q1 Jan-Mar, Q2 Apr-MAY,
+  Q3 Jun-AUG, Q4 Sep-DEC.
+- **She lives abroad** → automatic 2-month filing extension to 15 June. It
+  extends the FILING, not the PAYING.
+- **Vouchers go to P.O. Box 1303, Charlotte NC 28201-1303**, not the usual
+  address, because she files Form 2555.
+
+### To resume
+
+```bash
+cd ~/Documents/hostlyft-tax && source .venv/bin/activate
+python scripts/calc_tax.py           # where the tax stands
+python scripts/tax_calendar.py       # what is owed and what to file
+python scripts/build_tax_sheet.py    # refresh the Google tax sheet
+python -m pytest -q                  # 473 tests
+```
+
+**Next question to put to her:** did she have any income at all in 2024, and
+has she ever filed a US return? That decides whether 2024 needs a return too,
+and whether first-time penalty abatement is available for 2025.
+
+---
+
 ### Stage 13 — Scheduling (LAST — and on her main computer)
 
 **Do this only after every other stage is built, tested and working by hand.** She
