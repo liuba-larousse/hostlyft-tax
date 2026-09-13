@@ -77,6 +77,17 @@ SE_TAXABLE_SHARE = 0.9235
 
 
 def se_tax(net_profit):
+    """
+    DO NOT USE THIS FOR A TAB. Kept only because the jars warning quotes the
+    rate in prose.
+
+    It is 15.3% of 92.35% and nothing else - no home office, no FEIE, no
+    Social Security cap, no Additional Medicare. Applied to a net profit
+    that had not been through taxlib/tax.py, it made the Summary tab print
+    $3,667.23 where every other tab said $3,446.36.
+
+    The tax calculation lives in taxlib/tax.py. Read it from there.
+    """
     return round(max(0.0, net_profit) * SE_TAXABLE_SHARE * SE_TAX_RATE, 2)
 
 
@@ -167,7 +178,18 @@ def collect(connection, year):
     except Exception as problem:          # noqa: BLE001 - reported, not raised
         recon_error = str(problem)
 
+    # What is still sitting in each person's jar. Computed HERE rather than
+    # bolted on by build_all afterwards - summary_tab reads it, and a
+    # function should not depend on its caller having decorated the dict
+    # first. It raised KeyError the moment anything else called it.
+    jar_totals = {}
+    for jar in jars:
+        if jar["person"]:
+            jar_totals[jar["person"]] = (jar_totals.get(jar["person"], 0.0)
+                                         + (jar["amount_usd"] or 0))
+
     return {"totals": totals, "hostlyft": hostlyft, "marcus": marcus,
+            "jar_totals": jar_totals,
             "income": income, "expenses": expenses, "excluded": excluded,
             "review": review, "by_category": by_category, "by_month": by_month,
             "jars": jars, "contractors": contractors,
@@ -185,7 +207,7 @@ MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
                "December"]
 
 
-def summary_tab(data, year, built_on):
+def summary_tab(data, year, built_on, result=None):
     tab = Tab(money_columns=[1, 2, 3])
     t, h, m = data["totals"], data["hostlyft"], data["marcus"]
 
@@ -237,16 +259,32 @@ def summary_tab(data, year, built_on):
     in_jars = sum(data["jar_totals"].values())
     contractor_now = sum(info["withdrawn_usd"]
                          for info in data["contractors"].values())
-    net_now = t["net_profit_usd"]
-    net_after = money(net_now - in_jars)
+
+    # FROM THE CALCULATOR, NOT FROM A LOCAL FORMULA.
+    #
+    # This block used to apply its own se_tax() to db.totals' net profit,
+    # which is BEFORE the home office. It therefore printed $3,667.23 while
+    # calc_tax.py and the Tax Calendar said $3,446.36 - a $220.87 gap, the
+    # exact value of the home office deduction. She read the Summary,
+    # quite reasonably, and got a number no other tab agreed with.
+    #
+    # There is one tax calculation in this project and it lives in
+    # taxlib/tax.py. Every tab now reads from it.
+    net_after = money(result["net_profit"])
+    tax_after = money(result["total"])
+    net_now = money(result["net_profit_if_jars_stay"])
+    tax_now = money(result["tax_if_jars_stay"])
 
     tab.head("", "Contractor cost", "Net profit", "Est. self-employment tax")
-    tab.row("As things stand today", money(contractor_now), money(net_now),
-            se_tax(net_now))
+    tab.row("As things stand today", money(contractor_now), net_now, tax_now)
     tab.row("Once the jars are withdrawn",
-            money(contractor_now + in_jars), net_after, se_tax(net_after))
-    tab.total("Difference", money(in_jars), money(-in_jars),
-              money(se_tax(net_after) - se_tax(net_now)))
+            money(contractor_now + in_jars), net_after, tax_after)
+    tab.total("Difference", money(in_jars), money(net_after - net_now),
+              money(tax_after - tax_now))
+    tab.note(f"Net profit here is AFTER the ${result['home_office_usd']:,.2f} "
+             f"home office deduction, which is why it is lower than "
+             f"Schedule C line 29. The same figures as calc_tax.py and the "
+             f"Tax Calendar - there is one calculation, not several.")
     tab.note(f"${money(in_jars):,.2f} is sitting in contractor jars. It is "
              f"not deductible until it leaves — but it will leave, so the "
              f"second row is the more realistic picture.")
@@ -254,8 +292,10 @@ def summary_tab(data, year, built_on):
              "profit. US income tax is expected to be $0, because the "
              "Foreign Earned Income Exclusion covers everything up to "
              "$132,900 and net profit is well below that.")
-    tab.warn("An estimate. Stage 9 verifies every figure against the IRS "
-             "publication before this should be relied on.")
+    tab.warn("An estimate, but a verified one: every bracket and rate was "
+             "read from the IRS publications on 2026-08-26 and 2026-09-12. "
+             "Run scripts/verify_brackets.py to see each figure beside its "
+             "source.")
     tab.note("Money still in jars on 31 December does NOT get this "
              "deduction — it lands in next year instead. Target: jars empty "
              "by about 20 December.")
@@ -727,18 +767,10 @@ def tax_calendar_tab(connection, year, result, today=None):
 def build_all(connection, year, built_on):
     data = collect(connection, year)
 
-    # what is still sitting in each person's jar
-    data["jar_totals"] = {}
-    for jar in data["jars"]:
-        if jar["person"]:
-            data["jar_totals"][jar["person"]] = (
-                data["jar_totals"].get(jar["person"], 0.0)
-                + (jar["amount_usd"] or 0))
-
-    tabs = {"Summary": summary_tab(data, year, built_on)}
+    _tax = tax.from_database(connection, year)
+    tabs = {"Summary": summary_tab(data, year, built_on, result=_tax)}
     tabs.update(month_tabs(connection, data, year))
 
-    _tax = tax.from_database(connection, year)
     tabs["Tax Calendar"] = tax_calendar_tab(connection, year, _tax)
     tabs["Filling the forms"] = form_lines_tab(connection, year, _tax)
     tabs["Distributions"] = distributions_tab(connection, year)

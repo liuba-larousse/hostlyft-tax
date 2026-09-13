@@ -125,3 +125,65 @@ class TestTabOrder:
         from taxlib import tax_sheet
         order = tax_sheet.tab_order(dict.fromkeys(self.TABS))
         assert sorted(order) == sorted(self.TABS)
+
+
+class TestEveryTabQuotesTheSameTax:
+    """
+    She read the estimated SE tax off the Summary tab and got $3,667.23,
+    while calc_tax.py and the Tax Calendar both said $3,446.36. Both
+    numbers were "right" in their own terms - the Summary applied a local
+    15.3% x 92.35% helper to a net profit that had not been through
+    taxlib/tax.py, so it missed the $220.87 home office deduction.
+
+    A tab that disagrees with the calculator is worse than a tab that is
+    missing: it is read, believed, and acted on. There is one tax
+    calculation in this project. These tests hold the tabs to it.
+    """
+
+    @staticmethod
+    def _built():
+        from taxlib import db, tax, tax_sheet
+        conn = db.init_db()
+        result = tax.from_database(conn, 2026)
+        data = tax_sheet.collect(conn, 2026)
+        return conn, result, data
+
+    def test_the_summary_quotes_the_calculators_tax(self):
+        from taxlib import tax_sheet
+        conn, result, data = self._built()
+        tab = tax_sheet.summary_tab(data, 2026, "2026-09-13", result=result)
+        flat = [c for row in tab.rows for c in row]
+        assert result["total"] in flat, (
+            f"Summary does not contain {result['total']}")
+
+    def test_the_summary_does_not_quote_the_pre_home_office_figure(self):
+        """The specific wrong number she was shown."""
+        from taxlib import tax_sheet
+        conn, result, data = self._built()
+        tab = tax_sheet.summary_tab(data, 2026, "2026-09-13", result=result)
+        before_home_office = tax_sheet.se_tax(
+            result["net_profit"] + result["home_office_usd"])
+        flat = [c for row in tab.rows for c in row]
+        assert before_home_office not in flat
+
+    def test_the_forms_tab_agrees_with_the_summary(self):
+        from taxlib import tax_sheet
+        conn, result, data = self._built()
+        summary = tax_sheet.summary_tab(data, 2026, "2026-09-13",
+                                        result=result)
+        forms = tax_sheet.form_lines_tab(conn, 2026, result)
+        assert result["net_profit"] in [c for row in summary.rows
+                                        for c in row]
+        assert result["net_profit"] in [c for row in forms.rows for c in row]
+
+    def test_the_local_se_helper_is_not_used_to_build_any_tab(self):
+        """
+        It has no home office, no FEIE, no Social Security cap and no
+        Additional Medicare. It is kept only because the jars warning
+        quotes the rate in prose.
+        """
+        import inspect
+        from taxlib import tax_sheet
+        code = [line.split("#")[0]
+                for line in inspect.getsource(tax_sheet.summary_tab).split("\n")]
+        assert "se_tax(" not in "\n".join(code)
