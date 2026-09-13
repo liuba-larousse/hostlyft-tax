@@ -332,3 +332,56 @@ def quarterly_plan(connection, tax_year, paid_by_quarter=None):
             "voucher": voucher,
         })
     return {"year_tax": accrued[4], "quarters": rows}
+
+
+def current_quarter(tax_year, today=None):
+    """
+    The quarter we are standing INSIDE right now.
+
+    Not the one being filed - that is quarter_to_distribute(). On 13
+    September the estimate being paid is Q3 (June-August), but the quarter
+    currently running is Q4, which began on 1 September.
+    """
+    today = today or dt.date.today()
+    for quarter in (1, 2, 3, 4):
+        if today <= period_end(quarter, tax_year):
+            return quarter
+    return 4
+
+
+def position(connection, tax_year, paid_by_quarter=None, today=None):
+    """
+    Where she stands: this quarter so far, and what is behind it.
+
+    The running quarter's figure is the tax accrued SINCE the last cut-off -
+    what this quarter has added on its own, not the year to date. It is
+    incomplete by definition and grows until the quarter closes.
+    """
+    from taxlib import tax as _tax
+
+    today = today or dt.date.today()
+    quarter = current_quarter(tax_year, today)
+    plan = quarterly_plan(connection, tax_year, paid_by_quarter)
+
+    to_today = round(_tax.from_database(
+        connection, tax_year, through=today.isoformat()).get("total") or 0.0, 2)
+    previous = [row for row in plan["quarters"] if row["quarter"] < quarter]
+    to_last_cutoff = previous[-1]["accrued"] if previous else 0.0
+
+    return {
+        "quarter": quarter,
+        "period": dict((q, p) for q, p, _ in ESTIMATED_QUARTERS)[quarter],
+        "due": due_date(quarter, tax_year),
+        "accrued_this_quarter": round(to_today - to_last_cutoff, 2),
+        "past": previous,
+
+        # NOT the sum of the vouchers. Each voucher already carries the
+        # unpaid amount of every quarter before it, so adding them counted
+        # Q1 three times and produced $4,235.06 where the truth was
+        # $2,538.38. What is genuinely outstanding is the tax accrued by the
+        # last CLOSED quarter, less everything paid.
+        "outstanding": round(max(0.0, to_last_cutoff
+                                 - sum(row["paid"] for row in previous)), 2),
+        "accrued_to_last_cutoff": round(to_last_cutoff, 2),
+        "paid_so_far": round(sum(row["paid"] for row in previous), 2),
+    }

@@ -34,7 +34,7 @@ WHY EVERY ROW CARRIES ITS SOURCE ID
 
 import datetime as dt
 
-from taxlib import config, db, gsheets, reconcile, tax
+from taxlib import config, db, filings, gsheets, reconcile, tax
 from taxlib.sheet_style import Tab, format_requests
 
 
@@ -183,14 +183,29 @@ def collect(connection, year):
     # bolted on by build_all afterwards - summary_tab reads it, and a
     # function should not depend on its caller having decorated the dict
     # first. It raised KeyError the moment anything else called it.
+    tax_payments_rows = db.tax_payments_for(connection, year)
+
     jar_totals = {}
     for jar in jars:
         if jar["person"]:
             jar_totals[jar["person"]] = (jar_totals.get(jar["person"], 0.0)
                                          + (jar["amount_usd"] or 0))
 
+    # Where she stands on estimated tax, computed HERE for the same reason
+    # jar_totals is: summary_tab reads it, and a tab function should not
+    # need a live connection passed in beside the data it was given.
+    paid_totals = {}
+    for row in tax_payments_rows:
+        paid_totals[row["quarter"]] = (paid_totals.get(row["quarter"], 0.0)
+                                       + (row["amount_usd"] or row["amount"]
+                                          or 0.0))
+    try:
+        standing = filings.position(connection, year, paid_totals)
+    except Exception:                     # noqa: BLE001 - reported, not raised
+        standing = None
+
     return {"totals": totals, "hostlyft": hostlyft, "marcus": marcus,
-            "jar_totals": jar_totals,
+            "jar_totals": jar_totals, "standing": standing,
             "income": income, "expenses": expenses, "excluded": excluded,
             "review": review, "by_category": by_category, "by_month": by_month,
             "jars": jars, "contractors": contractors,
@@ -255,6 +270,41 @@ def summary_tab(data, year, built_on, result=None):
              "withdraw it, which is what the Expected column shows.")
     tab.note("Only withdrawals count toward the $600 that triggers a 1099.")
     tab.blank()
+
+    here = data.get("standing")
+    if here:
+        tab.section("ESTIMATED TAX — THIS QUARTER, AND WHAT IS BEHIND IT")
+        tab.head("Quarter", "Period", "Due", "Amount", "Status")
+        tab.row(f"Q{here['quarter']} — RUNNING NOW", here["period"],
+                str(here["due"]), money(here["accrued_this_quarter"]),
+                "accrued so far this quarter — still growing")
+        tab.blank()
+
+        for row in here["past"]:
+            outstanding = round(row["voucher"] - row["paid"], 2)
+            if outstanding <= 0.005:
+                tab.row(f"Q{row['quarter']}", row["period"], str(row["due"]),
+                        money(row["voucher"]), f"paid ${row['paid']:,.2f}")
+            else:
+                status = ("NOT SEEN PAID" if row["paid"] == 0 else
+                          f"part paid — ${outstanding:,.2f} still to go")
+                tab.warn(f"Q{row['quarter']}", row["period"],
+                         str(row["due"]), money(row["voucher"]), status)
+
+        tab.total("Outstanding on past quarters", "", "",
+                  money(here["outstanding"]), "")
+
+        tab.note("THE RUNNING QUARTER IS NOT DUE YET. Its figure is what has "
+                 "accrued since the last cut-off and it grows until the "
+                 "quarter closes — the quarters below it are settled "
+                 "periods.")
+        tab.note("Each quarter is computed on ITS OWN period. Income that "
+                 "arrived in September belongs to Q4, not Q3 — counting it "
+                 "in Q3 would pay its tax four months early.")
+        tab.note("\"NOT SEEN PAID\" is not \"unpaid\": this reads your "
+                 "personal Wise account only. Paid another way? Record it: "
+                 "python scripts/tax_calendar.py --paid Q3 --amount ...")
+        tab.blank()
 
     tab.section("WHAT THE JARS WILL DO TO YOUR TAX")
     in_jars = sum(data["jar_totals"].values())

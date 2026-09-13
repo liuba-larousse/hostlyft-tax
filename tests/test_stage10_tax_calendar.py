@@ -404,3 +404,69 @@ class TestEachQuarterUsesItsOwnPeriod:
         from taxlib import tax_sheet
         assert "quarterly_plan" in inspect.getsource(fill_1040es.main)
         assert "quarterly_plan" in inspect.getsource(tax_sheet.tax_calendar_tab)
+
+
+class TestWhereSheStandsRightNow:
+    """
+    Her request: the Summary should say what this RUNNING quarter has cost
+    so far, and what is still outstanding behind it.
+
+    The running quarter is not the one being filed. On 13 September the
+    estimate being paid is Q3 (June-August), while the quarter currently
+    running is Q4, which started on 1 September.
+    """
+
+    def test_september_is_inside_q4_not_q3(self):
+        import datetime as dt
+        from taxlib import filings
+        assert filings.current_quarter(2026, dt.date(2026, 9, 13)) == 4
+        assert filings.current_quarter(2026, dt.date(2026, 8, 31)) == 3
+
+    def test_it_differs_from_the_quarter_being_filed(self):
+        """
+        The two are different questions and both are needed - one says what
+        to pay on Monday, the other what is accruing now.
+        """
+        import datetime as dt
+        from taxlib import distribution, filings
+        today = dt.date(2026, 9, 13)
+        assert filings.current_quarter(2026, today) == 4
+        assert distribution.quarter_to_distribute(today)[1] == 3
+
+    def test_the_running_figure_is_this_quarter_only(self):
+        """
+        Not the year to date. It is what has accrued SINCE the last
+        cut-off, so it starts near zero each quarter and grows.
+        """
+        from taxlib import db, filings, tax
+        conn = db.init_db()
+        import datetime as dt
+        here = filings.position(conn, 2026, today=dt.date(2026, 9, 13))
+        to_aug = tax.from_database(conn, 2026, through="2026-08-31")["total"]
+        to_today = tax.from_database(conn, 2026,
+                                     through="2026-09-13")["total"]
+        assert abs(here["accrued_this_quarter"] - (to_today - to_aug)) < 0.05
+        assert here["accrued_this_quarter"] < to_today
+
+    def test_past_quarters_are_listed_with_what_is_still_owed(self):
+        import datetime as dt
+        from taxlib import db, filings
+        conn = db.init_db()
+        here = filings.position(conn, 2026, today=dt.date(2026, 9, 13))
+        assert [row["quarter"] for row in here["past"]] == [1, 2, 3]
+        # NOT the sum of the vouchers - each already carries the unpaid
+        # amount of the ones before it, so adding them counts Q1 three
+        # times. Outstanding is the tax accrued by the last CLOSED quarter
+        # less everything paid.
+        assert here["outstanding"] == here["accrued_to_last_cutoff"]
+        assert here["outstanding"] < sum(r["voucher"] for r in here["past"])
+
+    def test_recording_a_payment_reduces_what_is_outstanding(self):
+        import datetime as dt
+        from taxlib import db, filings
+        conn = db.init_db()
+        before = filings.position(conn, 2026,
+                                  today=dt.date(2026, 9, 13))["outstanding"]
+        after = filings.position(conn, 2026, {1: 256.04},
+                                 today=dt.date(2026, 9, 13))["outstanding"]
+        assert round(before - after, 2) == 256.04
