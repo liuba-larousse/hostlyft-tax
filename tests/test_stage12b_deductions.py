@@ -404,3 +404,54 @@ class TestAMealNeedsAReasonTheBankCannotSupply:
                            "FROM expenses").fetchone()
         assert row["business_purpose"] == "Planning with Ayoka"
         assert row["attendees"] == "Yetunde Olaniyan"
+
+
+class TestEquipmentReadFromThePersonalCard:
+    """
+    A fifth narrow extension to the personal account, at her request on
+    2026-09-13, for a work laptop bought on Amazon in July.
+
+    She asked to be SHOWN each one rather than have it counted
+    automatically, which is the right instinct: Amazon sells groceries as
+    readily as laptops and a bank row cannot tell them apart.
+    """
+
+    def test_the_laptop_is_recognised(self):
+        from taxlib import categorize
+        assert categorize.categorize(
+            "Card transaction of 3,405.99 EUR issued by Amazon Eu Sarl"
+        )[0] == "equipment"
+
+    def test_ordinary_amazon_shopping_is_not(self):
+        """
+        The whole point of the narrow rule. Her marketplace orders and
+        Prime subscription must not be swept into a business deduction.
+        """
+        from taxlib import categorize
+        for description in (
+                "Card transaction of 70.40 USD issued by Amzn Mktp Fr*3z1",
+                "Card transaction of 3.49 EUR issued by Amazon Prime Fr 2"):
+            assert categorize.categorize(description)[0] != "equipment"
+
+    def test_equipment_from_the_personal_account_always_lands_flagged(self):
+        from taxlib import wise_import
+        assert "equipment" in wise_import.PERSONAL_ALLOWED_CATEGORIES
+        assert "equipment" in wise_import.PERSONAL_NEEDS_CONFIRMING
+
+    def test_the_flag_names_both_things_the_bank_cannot_know(self):
+        from taxlib import wise_import
+        note = wise_import.PERSONAL_NEEDS_CONFIRMING["equipment"]
+        assert "business use" in note
+        assert "179" in note
+
+    def test_equipment_is_fully_deductible_once_confirmed(self):
+        """At its business-use share - the share is the judgement, not the
+        rate."""
+        from taxlib import config
+        assert config.deductible_share("equipment") == 1.0
+
+    def test_form_4562_is_in_the_filing_list(self):
+        """Over $2,500 an item, de minimis does not reach it."""
+        from taxlib import filings
+        form = next(f for f in filings.FORMS if "4562" in f["form"])
+        assert "179" in form["note"]

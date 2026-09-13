@@ -86,6 +86,22 @@ meals = restaurant, brasserie, bistro, boulangerie, cafe, café, coffee,
         McDonald, Starbucks, Pret A Manger, Deliveroo, Uber Eats,
         UBER *EATS, Just Eat, Glovo, DoorDash, catering
 
+# --- equipment ----------------------------------- [Schedule C line 18] ----
+# ALWAYS FLAGGED, NEVER ASSUMED. She asked for equipment to be read from
+# the personal account, and asked to be shown each one rather than have it
+# counted automatically - which is right, because Amazon sells groceries as
+# readily as laptops and the bank row cannot tell them apart.
+#
+# TWO THINGS DECIDE WHAT IT IS WORTH, AND NEITHER IS ON THE STATEMENT:
+#   - the BUSINESS-USE PERCENTAGE. A laptop used partly personally is
+#     deductible only at that share. Never assume 100%.
+#   - the PRICE. Under $2,500 an item, the de minimis safe harbour expenses
+#     it in the year you bought it. Above that it needs a Section 179
+#     election on Form 4562, or it is depreciated over several years.
+equipment = laptop, macbook, notebook computer, Apple Store, Amazon Eu Sarl,
+            Dell, Lenovo, monitor, keyboard, docking station, hard drive,
+            iPhone, headset, webcam, printer
+
 # --- entertainment ------------------------ [NOT DEDUCTIBLE AT ALL] --------
 # ZERO PERCENT. Not a lower rate - no deduction.
 #

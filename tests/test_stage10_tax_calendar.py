@@ -335,3 +335,72 @@ class TestTheRightAmountOnTheRightVoucher:
         for quarter, text in printed.items():
             pattern = fill_1040es.DUE_TEXT[quarter] % {"y": 2026, "next": 2027}
             assert re.search(pattern, text, re.I), (quarter, text)
+
+
+class TestEachQuarterUsesItsOwnPeriod:
+    """
+    Her catch. The calculator ran on everything in the tax year, which on
+    13 September meant everything up to 13 September - so a $4,000 payment
+    received on 2 September was inside the Q3 figure. Q3 ends 31 AUGUST.
+    That September money belongs to Q4, and taxing it in Q3 pays it four
+    months early.
+    """
+
+    def test_the_quarter_cut_offs_are_the_irs_periods(self):
+        import datetime as dt
+        from taxlib import filings
+        assert filings.period_end(1, 2026) == dt.date(2026, 3, 31)
+        assert filings.period_end(2, 2026) == dt.date(2026, 5, 31)
+        assert filings.period_end(3, 2026) == dt.date(2026, 8, 31)
+        assert filings.period_end(4, 2026) == dt.date(2026, 12, 31)
+
+    def test_income_after_the_cut_off_is_excluded(self):
+        from taxlib import db, tax
+        conn = db.init_db(":memory:")
+        for date, amount in (("2026-08-15", 10000.0), ("2026-09-02", 4000.0)):
+            db.upsert_income(conn, source="wise", source_id=f"i{date}",
+                             date=date, amount=amount, currency="USD",
+                             amount_usd=amount, description="fees")
+        conn.commit()
+        q3 = tax.from_database(conn, 2026, include_home_office=False,
+                               through="2026-08-31")
+        assert q3["totals"]["income_usd"] == 10000.0
+
+    def test_a_later_quarter_picks_it_up(self):
+        from taxlib import db, tax
+        conn = db.init_db(":memory:")
+        for date, amount in (("2026-08-15", 10000.0), ("2026-09-02", 4000.0)):
+            db.upsert_income(conn, source="wise", source_id=f"i{date}",
+                             date=date, amount=amount, currency="USD",
+                             amount_usd=amount, description="fees")
+        conn.commit()
+        q4 = tax.from_database(conn, 2026, include_home_office=False,
+                               through="2026-12-31")
+        assert q4["totals"]["income_usd"] == 14000.0
+
+    def test_the_home_office_is_never_asked_about_the_future(self):
+        """
+        It pro-rates on monthly exchange rates. A 31 December cut-off asks
+        for rates that do not exist yet, the lookup failed, and the Q4 home
+        office silently became $0.
+        """
+        from taxlib import db, tax
+        conn = db.init_db()
+        q4 = tax.from_database(conn, 2026, through="2026-12-31")
+        assert q4["home_office_usd"] > 0
+        assert q4["home_office_problem"] is None
+
+    def test_the_voucher_pdf_and_the_sheet_use_the_same_function(self):
+        """
+        They drifted within an hour: the PDF said $1,953.80 for Q3 while
+        the Tax Calendar said $2,538.38, because one projected the year and
+        the other accrued the period. One function now, as with the tax.
+        """
+        import inspect
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path.cwd() / "scripts"))
+        import fill_1040es
+        from taxlib import tax_sheet
+        assert "quarterly_plan" in inspect.getsource(fill_1040es.main)
+        assert "quarterly_plan" in inspect.getsource(tax_sheet.tax_calendar_tab)

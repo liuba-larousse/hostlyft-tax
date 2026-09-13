@@ -131,21 +131,17 @@ def main():
     for row in db.tax_payments_for(connection, args.year):
         paid[row["quarter"]] = (paid.get(row["quarter"], 0.0)
                                 + (row["amount_usd"] or row["amount"] or 0.0))
-    plan = filings.installments(result.get("total") or 0.0, paid,
-                                tax_year=args.year)
+    plan = filings.quarterly_plan(connection, args.year, paid)
     amounts = {row["quarter"]: row["voucher"] for row in plan["quarters"]}
 
     print(f"{BOLD}Form 1040-ES {args.year}{OFF}")
     print("=" * 74)
-    print(f"   Tax on the year so far      "
-          f"${result.get('total') or 0:>9,.2f}")
-    print(f"   Required annual payment     "
-          f"${plan['required_year']:>9,.2f}   (90% of it)")
-    print(f"   {YELLOW}Recomputed every run. Each voucher is the share due "
-          f"by ITS deadline{OFF}")
-    print(f"   {YELLOW}less what has been paid - so a quarter that earned "
-          f"more, or one{OFF}")
-    print(f"   {YELLOW}that was missed, is caught up by the next.{OFF}")
+    print(f"   Tax accrued for the full year   "
+          f"${plan['year_tax']:>9,.2f}")
+    print(f"   {YELLOW}Each quarter is computed on ITS OWN period - Q3 ends "
+          f"31 August, not today.{OFF}")
+    print(f"   {YELLOW}Each voucher is the tax accrued by that cut-off, "
+          f"less what has been paid.{OFF}")
     print()
 
     print("   downloading the form from irs.gov ...")

@@ -51,6 +51,7 @@ SCHEDULE_C = {
     "compliance and admin": "17 - Legal and professional",
     "professional services": "17 - Legal and professional",
     "advertising": "8 - Advertising",
+    "equipment": "18 - Office expense (or Form 4562 over $2,500)",
     "travel": "24a - Travel",
     "meals": "24b - Deductible meals",
     "entertainment": "24b - Deductible meals (NOT deductible - enter 0)",
@@ -693,8 +694,11 @@ def tax_calendar_tab(connection, year, result, today=None):
     # divided in March would leave the year short. Recomputed every build.
     paid_totals = {q: sum(r["amount_usd"] or r["amount"] or 0 for r in rows)
                    for q, rows in paid.items()}
-    plan = filings.installments(result.get("total") or 0.0, paid_totals,
-                                tax_year=year)
+    # The SAME function the voucher PDF uses. Two implementations of this
+    # drifted apart within an hour of each other.
+    paid_totals = {q: sum(r["amount_usd"] or r["amount"] or 0 for r in rows)
+                   for q, rows in paid.items()}
+    plan = filings.quarterly_plan(connection, year, paid_totals)
     owed = {row["quarter"]: row["voucher"] for row in plan["quarters"]}
 
     rows = []
@@ -720,14 +724,13 @@ def tax_calendar_tab(connection, year, result, today=None):
 
     quarters_tab = simple_tab(
         f"Estimated tax - {year}",
-        [f"Tax on the year so far is ${result.get('total') or 0:,.2f}; the "
-         f"required annual payment is 90% of it, "
-         f"${plan['required_year']:,.2f}. Self-employment tax is "
-         f"effectively all of it.",
-         "EACH VOUCHER IS THE SHARE DUE BY ITS OWN DEADLINE, less what has "
-         "been paid - not a flat quarter of the total. Income arrives "
-         "unevenly, so a figure divided in March would leave the year "
-         "short, and a missed quarter is caught up by the next one.",
+        ["EACH QUARTER IS COMPUTED ON ITS OWN PERIOD, not on everything up "
+         "to today. Q3 covers income received to 31 AUGUST - a payment that "
+         "arrived on 2 September belongs to Q4, and counting it in Q3 would "
+         "have you pay its tax four months early.",
+         "Each voucher is the tax accrued by that quarter's cut-off, less "
+         "what has already been paid. So a quarter that earned more asks "
+         "for more, and a missed quarter is caught up by the next.",
          "Rebuilt every run, which is the point: it is a snapshot of what "
          "is known today, and what is known keeps changing.",
          "IRS QUARTERS ARE NOT THREE MONTHS EACH. Q2 is two months and Q4 "

@@ -139,7 +139,7 @@ MATCH_WINDOW_DAYS = 45
 PERSONAL_ALLOWED_CATEGORIES = {
     "software", "phone and internet", "compliance and admin",
     "professional services", "advertising", "payment processing",
-    "travel", "meals",
+    "travel", "meals", "equipment",
 }
 
 # The subset that cannot be taken at face value even once it is read, and
@@ -151,6 +151,10 @@ PERSONAL_NEEDS_CONFIRMING = {
     "meals": ("a business meal needs the business purpose and who was "
               "present; only 50% is deductible, and a meal on your own "
               "near home is personal"),
+    "equipment": ("confirm what this was and what share of it is business "
+                  "use - never assume 100%. Over $2,500 an item it needs a "
+                  "Section 179 election on Form 4562 rather than the de "
+                  "minimis safe harbour"),
 }
 
 

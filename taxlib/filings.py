@@ -86,6 +86,18 @@ FORMS = [
                  "As a renter you skip the depreciation part entirely."),
     },
     {
+        "form": "Form 4562",
+        "what": "Section 179 election - expensing equipment in one year",
+        "due": "with Schedule C",
+        "who": "IRS",
+        "url": f"{IRS}/forms-pubs/about-form-4562",
+        "note": ("Needed for the work laptop: at $3,905.65 it is over the "
+                 "$2,500 de minimis safe harbour, so it cannot simply be "
+                 "expensed. Section 179 writes it off in full this year "
+                 "instead of depreciating it over several. Requires more "
+                 "than 50% business use - it is 100%."),
+    },
+    {
         "form": "FinCEN Form 114 (FBAR)",
         "what": "Foreign bank accounts, if they ever totalled over $10,000",
         "due": "15 April, automatic extension to 15 October",
@@ -264,3 +276,59 @@ def installments(tax_for_year, paid_by_quarter=None, today=None,
             "due": due_date(quarter, tax_year) if tax_year else None,
         })
     return {"required_year": required_year, "quarters": rows}
+
+
+# The last day of income that counts toward each estimated-tax quarter.
+QUARTER_ENDS = {1: (3, 31), 2: (5, 31), 3: (8, 31), 4: (12, 31)}
+
+
+def period_end(quarter, tax_year):
+    """The cut-off date for a quarter's income - NOT today's date."""
+    month, day = QUARTER_ENDS[quarter]
+    return dt.date(tax_year, month, day)
+
+
+def quarterly_plan(connection, tax_year, paid_by_quarter=None):
+    """
+    What each voucher should say - THE one place that works it out.
+
+    Two tabs and a PDF all need this figure, and when the Summary tab
+    computed its own version of the tax it printed a number no other tab
+    agreed with. The same trap was waiting here: fill_1040es.py said
+    $1,953.80 for Q3 while the Tax Calendar said $2,538.38, because one
+    projected the year and the other accrued the period.
+
+    The method is hers: pay the tax that has actually accrued by the end of
+    each quarter, less what has already been paid. No forecast of income
+    that has not arrived.
+
+    EACH QUARTER IS COMPUTED ON ITS OWN CUT-OFF - Q3 ends 31 AUGUST, not
+    today. Income that arrives in September belongs to Q4, and counting it
+    in Q3 pays its tax four months early.
+    """
+    from taxlib import tax as _tax
+
+    paid_by_quarter = paid_by_quarter or {}
+    rows, paid_running = [], 0.0
+
+    accrued = {}
+    for quarter in (1, 2, 3, 4):
+        end = period_end(quarter, tax_year).isoformat()
+        accrued[quarter] = round(
+            _tax.from_database(connection, tax_year,
+                               through=end).get("total") or 0.0, 2)
+
+    for quarter in (1, 2, 3, 4):
+        voucher = max(0.0, round(accrued[quarter] - paid_running, 2))
+        already = round(paid_by_quarter.get(quarter, 0.0), 2)
+        paid_running += already
+        rows.append({
+            "quarter": quarter,
+            "period": dict((q, p) for q, p, _ in ESTIMATED_QUARTERS)[quarter],
+            "period_end": period_end(quarter, tax_year),
+            "due": due_date(quarter, tax_year),
+            "accrued": accrued[quarter],
+            "paid": already,
+            "voucher": voucher,
+        })
+    return {"year_tax": accrued[4], "quarters": rows}

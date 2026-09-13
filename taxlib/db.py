@@ -1149,7 +1149,7 @@ def record_alert(connection, *, alert_key, alert_type, subject=None,
 #  READING TOTALS
 # ===========================================================================
 
-def totals(connection, tax_year=None, business=None):
+def totals(connection, tax_year=None, business=None, through=None):
     """
     Add everything up for a year and return it as a dictionary.
 
@@ -1172,6 +1172,16 @@ def totals(connection, tax_year=None, business=None):
     if business:
         conditions.append("AND business = ?")
         params.append(_checked_business(business))
+    if through:
+        # STOP AT THE END OF THE PERIOD, NOT AT TODAY.
+        #
+        # An estimated-tax quarter covers a fixed window: Q3 is June to
+        # AUGUST. Running the calculator on 13 September swept in a $4,000
+        # payment received on 2 September - Q4 money - and inflated the Q3
+        # voucher by the tax on it. Not a penalty risk, but her cash going
+        # out four months early, which is what she spotted.
+        conditions.append("AND date <= ?")
+        params.append(through)
     where_year = " ".join(conditions)
     params = tuple(params)
 

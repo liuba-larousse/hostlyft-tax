@@ -295,7 +295,7 @@ def pending_contractor_jars(connection, tax_year, today=None):
 
 
 def from_database(connection, tax_year, settings=None,
-                  include_home_office=True, today=None):
+                  include_home_office=True, today=None, through=None):
     """
     Run the estimate against what is actually recorded.
 
@@ -307,14 +307,34 @@ def from_database(connection, tax_year, settings=None,
     """
     from taxlib import home_office as ho
 
-    totals = db.totals(connection, tax_year)
+    totals = db.totals(connection, tax_year, through=through)
     profit_before = totals["net_profit_usd"]
+
+    # A DEDUCTION CANNOT BE CLAIMED BEFORE IT HAPPENS.
+    #
+    # When a period cut-off is given, the home office must be pro-rated to
+    # the months inside that period. Applied at its full-year value to a
+    # March computation it took Q1 profit down to $840 - and with the jar
+    # payout on top, almost to nothing.
+    # NEVER ASK THE HOME OFFICE ABOUT THE FUTURE. It pro-rates on monthly
+    # exchange rates, and a cut-off of 31 December needs rates for months
+    # that have not happened - which fails, and the deduction silently
+    # became $0 on the Q4 line. Capped at today: the deduction claimable so
+    # far, which is the honest figure and grows as the year does.
+    _today = today or _dt.date.today()
+    if isinstance(_today, str):
+        _today = _dt.date.fromisoformat(_today[:10])
+    as_of = through or today
+    if through:
+        cut = (_dt.date.fromisoformat(through[:10])
+               if isinstance(through, str) else through)
+        as_of = min(cut, _today).isoformat()
 
     office, office_problem = None, None
     if include_home_office:
         try:
             office = ho.best(connection, tax_year, net_profit=profit_before,
-                             today=today)
+                             today=as_of)
         except ho.HomeOfficeNotClaimed as problem:
             office_problem = str(problem)
         except Exception as problem:      # noqa: BLE001 - reported, not raised
@@ -329,6 +349,19 @@ def from_database(connection, tax_year, settings=None,
     active = (settings or config.SETTINGS).get(
         "assume_contractor_jars_paid_by_year_end", True)
     jars = pending_contractor_jars(connection, tax_year, today=today)
+
+    # THE JAR DEDUCTION APPLIES TO EVERY PERIOD, NOT JUST TO DECEMBER.
+    #
+    # Strictly the money leaves in December, so a quarter ending in August
+    # has not yet seen it. But she has stated twice, as a fact, that it WILL
+    # be paid this year - and an estimated payment exists to approximate the
+    # final bill. Leaving the deduction out of the earlier quarters would
+    # have her pay tax now on a deduction she is certain to take, and
+    # reclaim it in April. That is precisely the overpayment she asked to
+    # stop.
+    #
+    # The risk it carries is the one the 1 December alert already chases: if
+    # the jars are still full at year end, these estimates were low.
     projected_profit = net_profit
     if active and jars["usd"]:
         projected_profit = db.round_money(max(0.0, net_profit - jars["usd"]))
@@ -346,6 +379,7 @@ def from_database(connection, tax_year, settings=None,
     result["home_office_problem"] = office_problem
     result["home_office_usd"] = claimed
 
+    result["through"] = through
     result["contractor_jars"] = jars
     result["jars_assumption_applied"] = bool(active and jars["usd"])
     result["net_profit_if_jars_stay"] = net_profit
